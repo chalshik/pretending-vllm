@@ -10,10 +10,11 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: M1 and M2 complete, M3 in progress.** The OpenAI server, the offline `LLM` class,
-> `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, and the debug surface (JSONL
-> trace, timeline viewer, `/debug/*` endpoints) all work. The conformance suite and the benchmark
-> CLI are landing; tensor parallelism, LoRA, and speculative decoding come in M4.
+> **Status: M1–M3 complete.** The OpenAI server, the offline `LLM` class, `AsyncLLM`, `/metrics`,
+> prefix caching, chunked prefill, preemption, the debug surface (JSONL trace, timeline viewer,
+> `/debug/*` endpoints), the conformance suite, `pvllm bench`, the multiprocess engine core, and
+> real/scaled clocks all work. Tensor parallelism, LoRA, speculative decoding, structured output,
+> and multimodal come in M4.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -101,6 +102,42 @@ pvllm serve --model dense-0.6b --enable-debug-endpoints
 
 All read-only, all off by default — they expose prompt token ids, and the gate mirrors upstream's
 `VLLM_SERVER_DEV_MODE`. `/debug/cost_model` reports modeled durations; see the fidelity contract.
+
+## Making time real
+
+By default the clock is **virtual**: the engine models each step's duration without
+spending it, so a workload representing minutes of serving runs in seconds. That is what makes
+sweeps and CI runs cheap.
+
+When you want your own client's timeouts, retries, and streaming behavior exercised against
+something that actually takes time:
+
+```bash
+pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --clock-mode real
+```
+
+`--clock-mode scaled --time-scale 10` replays the same timeline ten times faster. All three modes
+report **identical** numbers — they differ only in whether the process waits. So a virtual-clock CI
+run and a real-clock demo can be compared directly.
+
+Real mode is faithful all the way through startup: an 8B model on `datacenter-80gb` takes about
+eight seconds to become ready, because that is what the memory model says loading its weights costs.
+
+## Running the engine in its own process
+
+```bash
+PVLLM_ENABLE_V1_MULTIPROCESSING=1 pvllm serve --model dense-8b
+```
+
+Mirrors upstream's `VLLM_ENABLE_V1_MULTIPROCESSING`: the engine core runs in a separate process and
+the frontend talks to it over ZeroMQ with msgspec-encoded frames. Serialization and backpressure
+become real, so a product that sends something the wire format cannot carry finds out here.
+
+**It defaults off, unlike upstream.** The core steps whenever it has work, so batch composition
+depends on OS scheduling rather than only on the workload — which costs the byte-identical
+determinism the conformance suite and the sweep runner both rely on. Upstream defaults it on because
+there it buys overlap with the GPU; here it buys realism at the cost of reproducibility, so turning
+it on is a deliberate act.
 
 ## Comparing configurations
 

@@ -3,8 +3,10 @@
 Upstream: vllm/v1/executor/uniproc_executor.py
 Tier: B
 
-One worker, in this process. The default for tests and the only implementation until
-the multiprocess engine core lands in M3 (D2).
+One worker, in this process, and the only executor implementation. Note the level:
+the *engine core* can run in its own process (R4.2), but the executor inside it is
+always in-process -- multi-worker execution is tensor and pipeline parallelism, which
+lands in M4. The two are independent axes and easy to conflate.
 
 The worker class is *not* hardcoded: it comes from `parallel_config.worker_cls`, which
 `SimPlatform.check_and_update_config` filled in from `"auto"` (B2). That indirection is
@@ -71,6 +73,14 @@ class UniProcExecutor(Executor):
         # The worker is resolved by qualname at runtime (B2), so it is untyped here;
         # narrow explicitly rather than letting Any leak into the engine core.
         output: ModelRunnerOutput = self.driver_worker.execute_model(scheduler_output)
+        return output
+
+    async def execute_model_async(
+        self, scheduler_output: SchedulerOutput
+    ) -> ModelRunnerOutput:
+        output: ModelRunnerOutput = await self.driver_worker.execute_model_async(
+            scheduler_output
+        )
         return output
 
     def check_health(self) -> None:

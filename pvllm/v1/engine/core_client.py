@@ -3,14 +3,15 @@
 Upstream: vllm/v1/engine/core_client.py
 Tier: B
 
-R4.2/D2: three implementations are intended -- in process, multiprocess synchronous,
-and multiprocess asynchronous. Only the in-process one exists until M3.
+R4.2/D2: three implementations, as upstream has -- in process (`InprocClient` here),
+multiprocess synchronous and multiprocess asynchronous (`core_client_mp.py`).
 
-The abstraction ships now anyway, because the *clock ownership* rule it implies
-(R19.1) cannot be retrofitted. In process, a frontend that read `time.time()` would
-appear to work; over a process boundary it would silently mix two timelines. Making
-every timestamp come back across this interface from the start means the multiprocess
-implementation is a transport change rather than a redesign.
+The interface was shaped around *clock ownership* (R19.1) from the first commit,
+before either multiprocess client existed, because that part cannot be retrofitted.
+In process, a frontend that read `time.time()` would appear to work; over a process
+boundary it would silently mix two timelines. Making every timestamp come back across
+this interface from the start is what made the multiprocess implementation a transport
+change rather than a redesign -- see `core_client_mp.py`, where it paid off.
 """
 
 from __future__ import annotations
@@ -37,12 +38,17 @@ class EngineCoreClient(ABC):
         log_stats: bool = True,
     ) -> EngineCoreClient:
         if multiprocess_mode:
-            raise NotImplementedError(
-                "the multiprocess engine core (requirement R4.2) lands in M3. It uses "
-                "real OS processes and ZeroMQ so that serialization cost and "
-                "backpressure are real rather than modeled, which is why it is not "
-                "stubbed here."
-            )
+            if executor_class is not None:
+                raise NotImplementedError(
+                    "a custom executor_class cannot be sent to the multiprocess "
+                    "engine core: the child receives its configuration by pickle, "
+                    "and a class defined in a test module does not survive the spawn "
+                    "start method. Use multiprocess_mode=False for custom executors."
+                )
+            from pvllm.v1.engine.core_client_mp import AsyncMPClient, SyncMPClient
+
+            client_class = AsyncMPClient if asyncio_mode else SyncMPClient
+            return client_class(vllm_config, log_stats=log_stats)
         return InprocClient(
             vllm_config, executor_class=executor_class, log_stats=log_stats
         )
@@ -55,6 +61,33 @@ class EngineCoreClient(ABC):
 
     @abstractmethod
     def get_output(self) -> dict[int, EngineCoreOutputs]: ...
+
+    @abstractmethod
+    async def get_output_async(self) -> dict[int, EngineCoreOutputs]:
+        """As `get_output`, from an event loop.
+
+        Separate rather than one method the caller may or may not await: in process
+        this is where the step's modeled duration is *spent*, and a real clock must
+        release the loop while spending it or the server stops streaming exactly
+        when it should be streaming most.
+        """
+
+    @property
+    @abstractmethod
+    def clock_time(self) -> float:
+        """The engine's time. The only way a frontend may learn it (R19.1).
+
+        On the interface, not just on the in-process client: over a process boundary
+        the frontend cannot reach the clock at all, so every consumer has to go
+        through here or it will reach for `time.time()` the moment the core moves.
+        """
+
+    @abstractmethod
+    def make_stats(self) -> dict[str, Any]:
+        """A snapshot of engine statistics for the metrics layer."""
+
+    @abstractmethod
+    def reset_prefix_cache(self) -> bool: ...
 
     @abstractmethod
     def has_requests(self) -> bool:
@@ -94,6 +127,10 @@ class InprocClient(EngineCoreClient):
 
     def get_output(self) -> dict[int, EngineCoreOutputs]:
         outputs, _ = self.engine_core.step()
+        return outputs
+
+    async def get_output_async(self) -> dict[int, EngineCoreOutputs]:
+        outputs, _ = await self.engine_core.step_async()
         return outputs
 
     def has_requests(self) -> bool:

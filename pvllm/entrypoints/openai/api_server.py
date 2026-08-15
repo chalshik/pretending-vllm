@@ -59,7 +59,7 @@ class ServerState:
         if model_config.model not in self.served_model_names:
             self.served_model_names.append(model_config.model)
 
-        created = int(self.engine.engine_core.clock_time)  # type: ignore[attr-defined]
+        created = int(self.engine.engine_core.clock_time)
         self.completion = OpenAIServingCompletion(self.engine, self.served_model_names)
         self.chat = OpenAIServingChat(self.engine, self.served_model_names)
         self.models = OpenAIServingModels(

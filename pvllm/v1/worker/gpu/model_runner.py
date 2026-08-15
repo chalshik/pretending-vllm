@@ -24,7 +24,7 @@ import numpy as np
 
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
-from pvllm.sim.cost_model import StepProfile
+from pvllm.sim.cost_model import StepCost, StepProfile
 from pvllm.sim.device import SimDevice
 from pvllm.sim.model import SimModel
 from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
@@ -283,12 +283,44 @@ class SimModelRunner:
 
     def execute_model(self, scheduler_output: SchedulerOutput) -> ModelRunnerOutput:
         """R8.1. The one interface that crosses the simulation boundary."""
+        plan = self._plan_step(scheduler_output)
+        if plan is None:
+            return ModelRunnerOutput.make_empty()
+        input_batch, profile = plan
+        return self._finish_step(input_batch, self.device.execute(profile))
+
+    async def execute_model_async(
+        self, scheduler_output: SchedulerOutput
+    ) -> ModelRunnerOutput:
+        """As `execute_model`, but yields to the event loop while time passes.
+
+        Only under a real or scaled clock is there any time to yield -- a virtual
+        clock returns instantly either way. But under `--clock-mode real` the async
+        engine would otherwise block its loop for the modeled duration of every step,
+        and a server that stops streaming for exactly as long as the step it is
+        streaming through defeats the reason to run a real clock at all.
+
+        The *result* is identical to the sync path by construction: both call
+        `_plan_step` and `_finish_step`, and only the line that spends the duration
+        differs. Two separately-written paths would eventually disagree about
+        something, and the disagreement would look like a clock-mode-dependent bug.
+        """
+        plan = self._plan_step(scheduler_output)
+        if plan is None:
+            return ModelRunnerOutput.make_empty()
+        input_batch, profile = plan
+        return self._finish_step(input_batch, await self.device.execute_async(profile))
+
+    def _plan_step(
+        self, scheduler_output: SchedulerOutput
+    ) -> tuple[InputBatch, StepProfile] | None:
+        """Everything before the forward pass. `None` when there is nothing to run."""
         # Requests that left must be dropped before slots are needed for new ones.
         self.finish_requests(scheduler_output)
         self.free_states(scheduler_output)
 
         if scheduler_output.total_num_scheduled_tokens == 0:
-            return ModelRunnerOutput.make_empty()
+            return None
 
         self.add_requests(scheduler_output)
         self.update_requests(scheduler_output)
@@ -305,16 +337,18 @@ class SimModelRunner:
             and attn_metadata.num_prefills == 0
         )
 
-        cost = self.device.execute(
-            StepProfile(
-                num_tokens=input_batch.num_tokens,
-                num_reqs=input_batch.num_reqs,
-                query_lens=input_batch.num_scheduled_tokens.tolist(),
-                seq_lens=input_batch.seq_lens_np.tolist(),
-                is_graph_hit=graph_hit,
-            )
+        return input_batch, StepProfile(
+            num_tokens=input_batch.num_tokens,
+            num_reqs=input_batch.num_reqs,
+            query_lens=input_batch.num_scheduled_tokens.tolist(),
+            seq_lens=input_batch.seq_lens_np.tolist(),
+            is_graph_hit=graph_hit,
         )
 
+    def _finish_step(
+        self, input_batch: InputBatch, cost: StepCost
+    ) -> ModelRunnerOutput:
+        """Everything after it."""
         sampler_output = self.sample_tokens(input_batch)
         sampler_output.modeled_duration = cost.duration
 

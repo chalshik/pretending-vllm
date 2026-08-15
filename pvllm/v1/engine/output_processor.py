@@ -185,11 +185,20 @@ class OutputProcessor:
             finished = finish_reason is not None
             state.num_cached_tokens = engine_output.num_cached_tokens
 
+            # QUEUED is the core's own arrival stamp, and it supersedes the
+            # frontend's. In process the two are equal; over a process boundary the
+            # frontend only knows the *last step's* time when it submits, so its
+            # estimate is stale by up to a step and every queue time computed from
+            # it would be inflated by that much. Taking the core's stamp makes the
+            # timing identical in both transports (R19.1).
+            #
             # The first SCHEDULED event ends the queue wait. Only the first: a
             # preempted request is admitted again later, and taking the newer stamp
             # would report a queue time longer than the request's whole life.
             for event in engine_output.events or ():
-                if (
+                if event.type is EngineCoreEventType.QUEUED:
+                    state.arrival_time = event.timestamp
+                elif (
                     event.type is EngineCoreEventType.SCHEDULED
                     and not state.scheduled_time
                 ):

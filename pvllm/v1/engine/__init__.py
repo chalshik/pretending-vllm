@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import enum
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import msgspec
 
-if TYPE_CHECKING:
-    from pvllm.sampling_params import SamplingParams
+# Imported at runtime, not under TYPE_CHECKING. msgspec resolves a Struct's
+# annotations when it builds a decoder, so a type that exists only for the type
+# checker makes `Decoder(EngineCoreRequest)` raise `NameError` -- which the
+# in-process client never triggers, because it never decodes anything. The
+# multiprocess client does, on every request.
+from pvllm.sampling_params import SamplingParams
 
 FINISH_REASON_STRINGS = ("stop", "length", "abort", "error", "repetition")
 
@@ -129,3 +133,45 @@ class EngineCoreOutputs(
     scheduler_stats: Any = None
     timestamp: float = 0.0
     finished_requests: set[str] | None = None
+
+
+class EngineCoreRequestType(enum.Enum):
+    """What a frame on the input socket carries.
+
+    Hex byte strings so the tag needs no encoding step of its own, matching upstream.
+    """
+
+    ADD = b"\x00"
+    ABORT = b"\x01"
+    UTILITY = b"\x02"
+    #: Sentinel used inside the core process to wake a blocked input queue.
+    WAKEUP = b"\x03"
+
+
+class UtilityCall(msgspec.Struct, array_like=True, gc=False):
+    """A synchronous call from the frontend to the core.
+
+    Everything that is not "add a request" or "abort a request" -- reading the
+    engine's clock, scraping stats, resetting the prefix cache. Correlated by
+    `call_id` because the reply comes back interleaved with output frames on the
+    same socket, and matching by arrival order alone would break the first time two
+    calls were in flight.
+    """
+
+    call_id: int
+    method: str
+    args: list[Any] = []
+
+
+class UtilityReply(msgspec.Struct, array_like=True, gc=False):
+    """The answer to a `UtilityCall`, or the error it raised.
+
+    Errors travel as text rather than being re-raised structurally: a traceback from
+    another process is not reconstructable, and a string that names the method and
+    the failure is more use than a plausible-looking exception with the wrong
+    traceback attached.
+    """
+
+    call_id: int
+    result: Any = None
+    error: str | None = None

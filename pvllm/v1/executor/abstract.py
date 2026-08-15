@@ -5,7 +5,8 @@ Tier: B
 
 R7.1. The executor is what the engine core talks to; it hides how many workers there
 are and where they run. `UniProcExecutor` is the only implementation until the
-multiprocess engine core lands in M3 (D2).
+multi-worker executors (tensor and pipeline parallelism) land in M4. The
+multiprocess *engine core* (R4.2) is a different axis and already exists.
 """
 
 from __future__ import annotations
@@ -33,8 +34,9 @@ class Executor(ABC):
         """Pick the executor for a config.
 
         Upstream dispatches on `distributed_executor_backend`. Only the in-process
-        path exists until M3, and asking for another names what is missing rather
-        than silently running single-process (which would report wrong throughput).
+        path exists, and asking for another names what is missing rather than
+        silently running single-process -- which would report throughput for a
+        parallelism that was never applied.
         """
         backend = vllm_config.parallel_config.distributed_executor_backend
         if backend in (None, "uni"):
@@ -43,8 +45,10 @@ class Executor(ABC):
             return UniProcExecutor
         raise NotImplementedError(
             f"distributed_executor_backend={backend!r} is not implemented. The "
-            f"multiprocess engine core (requirement R4.2) lands in M3; until then "
-            f"only the in-process executor exists."
+            f"multi-worker executors (tensor and pipeline parallelism, R14) land "
+            f"in M4; only the in-process executor exists. Note that the "
+            f"multiprocess engine core (R4.2) is a separate axis and does exist -- "
+            f"see PVLLM_ENABLE_V1_MULTIPROCESSING."
         )
 
     @abstractmethod
@@ -78,6 +82,18 @@ class Executor(ABC):
     @abstractmethod
     def execute_model(self, scheduler_output: SchedulerOutput) -> ModelRunnerOutput:
         """Run one step. The simulation boundary."""
+
+    @abstractmethod
+    async def execute_model_async(
+        self, scheduler_output: SchedulerOutput
+    ) -> ModelRunnerOutput:
+        """Run one step, yielding to the event loop while modeled time passes.
+
+        Abstract rather than a default that calls `execute_model`: a default would
+        let an executor silently block the loop under a real clock, which is the
+        exact failure this exists to prevent, and it would look correct in every
+        virtual-clock test.
+        """
 
     @abstractmethod
     def check_health(self) -> None: ...

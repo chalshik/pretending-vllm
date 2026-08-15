@@ -11,6 +11,7 @@ from pvllm.sampling_params import RequestOutputKind, SamplingParams
 from pvllm.v1.engine.async_llm import AsyncLLM
 from pvllm.v1.engine.core_client import EngineCoreClient
 from pvllm.v1.engine.llm_engine import LLMEngine
+from pvllm.v1.executor.uniproc_executor import UniProcExecutor
 
 BASE = {
     "model": "dense-0.6b",
@@ -267,10 +268,15 @@ def test_a_preempted_request_does_not_report_a_second_queue_wait():
         assert stats.queue_time <= stats.e2e_latency
 
 
-def test_the_multiprocess_client_names_what_is_missing():
+def test_a_custom_executor_cannot_cross_a_process_boundary():
+    """Named rather than failing obscurely inside the child: a class defined in a
+    test module does not survive the spawn start method, and the failure would
+    otherwise be an unpickling error from a process whose traceback nobody sees."""
     config = EngineArgs(**BASE).create_engine_config()
-    with pytest.raises(NotImplementedError, match="multiprocess engine core"):
-        EngineCoreClient.make_client(config, multiprocess_mode=True)
+    with pytest.raises(NotImplementedError, match="custom executor_class"):
+        EngineCoreClient.make_client(
+            config, multiprocess_mode=True, executor_class=UniProcExecutor
+        )
 
 
 # --- the async engine (R4.3) -----------------------------------------------

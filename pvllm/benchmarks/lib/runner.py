@@ -59,9 +59,20 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
     from its own clock -- so these numbers and a `/metrics` scrape of the same run
     agree by construction rather than by coincidence.
     """
+    from pvllm.v1.engine.core_client import InprocClient
+
     llm_engine = engine.llm_engine
     core = llm_engine.engine_core
-    start = core.clock_time  # type: ignore[attr-defined]
+    # In process only, and deliberately. The idle-skip below reaches the clock
+    # directly, which no frontend may do across a process boundary (R19.1) -- and a
+    # multiprocess benchmark would be measuring IPC scheduling on top of the modeled
+    # timeline anyway, which is not what any of these numbers claim to be.
+    assert isinstance(core, InprocClient), (
+        "benchmarks drive the in-process engine core; the multiprocess client cannot "
+        "skip idle time, and its numbers would include IPC latency the cost model "
+        "does not model"
+    )
+    start = core.clock_time
 
     pending = sorted(enumerate(requests), key=lambda item: item[1].arrival)
     next_index = 0
@@ -69,7 +80,7 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
 
     def submit_due() -> None:
         nonlocal next_index
-        elapsed = core.clock_time - start  # type: ignore[attr-defined]
+        elapsed = core.clock_time - start
         while next_index < len(pending):
             index, request = pending[next_index]
             if request.arrival > elapsed:
@@ -90,8 +101,8 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
             # stepping an empty engine would advance modeled time by a step's
             # duration and invent idle work that never happened.
             _, request = pending[next_index]
-            core.engine_core.clock.advance(  # type: ignore[attr-defined]
-                max(0.0, request.arrival - (core.clock_time - start))  # type: ignore[attr-defined]
+            core.engine_core.clock.advance(
+                max(0.0, request.arrival - (core.clock_time - start))
             )
             submit_due()
             continue
@@ -100,7 +111,7 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
         finished.extend(llm_engine.last_iteration_stats.finished_requests)
         submit_due()
 
-    duration = core.clock_time - start  # type: ignore[attr-defined]
+    duration = core.clock_time - start
     stats: dict[str, Any] = llm_engine.make_stats()
     queries = stats.get("prefix_cache_queries", 0)
     return RunResult(

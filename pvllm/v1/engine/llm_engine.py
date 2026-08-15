@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pvllm import envs
 from pvllm.config import VllmConfig
 from pvllm.engine.arg_utils import EngineArgs
 from pvllm.logger import init_logger
@@ -18,7 +19,7 @@ from pvllm.outputs import RequestOutput
 from pvllm.sampling_params import SamplingParams
 from pvllm.tokenizers import get_tokenizer
 from pvllm.tokenizers.protocol import TokenizerLike
-from pvllm.v1.engine.core_client import EngineCoreClient, InprocClient
+from pvllm.v1.engine.core_client import EngineCoreClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
 from pvllm.v1.metrics.stats import IterationStats
@@ -45,8 +46,13 @@ class LLMEngine:
         )
         self.input_processor = InputProcessor(vllm_config, self.tokenizer)
         self.output_processor = OutputProcessor(self.tokenizer, log_stats=log_stats)
+        # R4.2. Off unless asked for, unlike upstream -- see
+        # PVLLM_ENABLE_V1_MULTIPROCESSING in pvllm/envs.py for why the default is
+        # inverted here.
         self.engine_core: EngineCoreClient = EngineCoreClient.make_client(
-            vllm_config, log_stats=log_stats
+            vllm_config,
+            multiprocess_mode=envs.PVLLM_ENABLE_V1_MULTIPROCESSING,
+            log_stats=log_stats,
         )
         #: The most recent step's stats, for whoever scrapes them.
         self.last_iteration_stats = IterationStats()
@@ -69,7 +75,6 @@ class LLMEngine:
         )
         # The arrival time comes back from the core, which stamped it (R19.1).
         self.engine_core.add_request(engine_request)
-        assert isinstance(self.engine_core, InprocClient)
         self.output_processor.add_request(
             request_id=request_id,
             prompt=prompt if isinstance(prompt, str) else None,
@@ -88,7 +93,6 @@ class LLMEngine:
         if not engine_core_outputs:
             return []
 
-        assert isinstance(self.engine_core, InprocClient)
         now = self.engine_core.clock_time
         iteration_stats = IterationStats()
 
@@ -126,11 +130,9 @@ class LLMEngine:
         return self.output_processor.num_requests
 
     def make_stats(self) -> dict[str, Any]:
-        assert isinstance(self.engine_core, InprocClient)
         return self.engine_core.make_stats()
 
     def reset_prefix_cache(self) -> bool:
-        assert isinstance(self.engine_core, InprocClient)
         return self.engine_core.reset_prefix_cache()
 
     def shutdown(self) -> None:

@@ -290,8 +290,10 @@ class EngineArgs:
 class AsyncEngineArgs(EngineArgs):
     """EngineArgs for the async engine.
 
-    Upstream adds `disable_log_requests` here; in-process is the only engine-core
-    client until M3 (D2), so the multiprocess switches are absent rather than stubbed.
+    Upstream adds `disable_log_requests` here. The multiprocess engine core is
+    selected by `PVLLM_ENABLE_V1_MULTIPROCESSING` rather than by an argument,
+    mirroring upstream's `VLLM_ENABLE_V1_MULTIPROCESSING` -- but defaulting off,
+    because it trades away B4's determinism (see pvllm/envs.py).
     """
 
     disable_log_requests: bool = False

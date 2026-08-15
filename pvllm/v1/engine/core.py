@@ -25,6 +25,7 @@ from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
 from pvllm.timebase import Clock
 from pvllm.tracing import TraceSink
+from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.core.sched.scheduler import Scheduler
 from pvllm.v1.engine import (
     EngineCoreEventType,
@@ -37,6 +38,7 @@ from pvllm.v1.kv_cache_interface import (
     KVCacheGroupSpec,
     KVCacheSpec,
 )
+from pvllm.v1.outputs import ModelRunnerOutput
 from pvllm.v1.request import Request, RequestStatus
 
 logger = init_logger(__name__)
@@ -174,8 +176,29 @@ class EngineCore:
         Returns the outputs keyed by client index -- the shape data parallelism needs
         (F7) -- and whether the model actually ran.
         """
-        if not self.scheduler.has_requests():
+        planned = self._plan_step()
+        if planned is None:
             return {}, False
+        return self._finish_step(planned, self.executor.execute_model(planned))
+
+    async def step_async(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
+        """One engine step, yielding to the event loop while modeled time passes.
+
+        Identical to `step` except for the line that spends the step's duration --
+        the two share `_plan_step` and `_finish_step` so a clock mode can never
+        change what the engine decided, only how long the process spent deciding it.
+        """
+        planned = self._plan_step()
+        if planned is None:
+            return {}, False
+        return self._finish_step(
+            planned, await self.executor.execute_model_async(planned)
+        )
+
+    def _plan_step(self) -> SchedulerOutput | None:
+        """Schedule and date the admissions. `None` when there is nothing to do."""
+        if not self.scheduler.has_requests():
+            return None
 
         scheduler_output = self.scheduler.schedule()
 
@@ -185,8 +208,11 @@ class EngineCore:
         scheduled_at = self.clock.time()
         for request in self.scheduler.take_newly_scheduled():
             request.record_event(EngineCoreEventType.SCHEDULED, scheduled_at)
+        return scheduler_output
 
-        model_output = self.executor.execute_model(scheduler_output)
+    def _finish_step(
+        self, scheduler_output: SchedulerOutput, model_output: ModelRunnerOutput
+    ) -> tuple[dict[int, EngineCoreOutputs], bool]:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )

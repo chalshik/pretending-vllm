@@ -134,11 +134,11 @@ class SimModel:
         if self.content_policy == "echo":
             raise NotImplementedError(
                 "the echo content policy (requirement R11.3) needs the prompt at "
-                "sampling time; it lands in M3 with the trace viewer"
+                "sampling time, which the sampler does not receive"
             )
         if self.content_policy == "fixture":
             raise NotImplementedError(
-                "the fixture content policy (requirement R11.3) lands in M3"
+                "the fixture content policy (requirement R11.3) is not implemented"
             )
         raise ValueError(f"unknown content_policy {self.content_policy!r}")
 

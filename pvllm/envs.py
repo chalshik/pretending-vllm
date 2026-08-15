@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     PVLLM_TRACE_PATH: str | None = None
     PVLLM_PLUGINS: list[str] | None = None
     PVLLM_USE_V2_MODEL_RUNNER: bool | None = None
+    PVLLM_ENABLE_V1_MULTIPROCESSING: bool = False
 
 
 def _maybe_convert_bool(value: str | None) -> bool | None:
@@ -67,6 +68,18 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     # R19.3: where the JSONL event trace is written. Unset means no trace.
     "PVLLM_TRACE_PATH": lambda: os.getenv("PVLLM_TRACE_PATH") or None,
+    # R4.2. Mirrors VLLM_ENABLE_V1_MULTIPROCESSING, but defaults the *other way*.
+    #
+    # Upstream defaults it on, because there the background process buys real
+    # overlap with the GPU. Here it buys real serialization and real backpressure
+    # and costs B4: the core steps whenever it has work, so batch composition
+    # depends on OS scheduling rather than only on the workload. Determinism is
+    # load-bearing for this project -- it is what the conformance suite compares and
+    # what makes two runs of a sweep differ only in what was configured -- so the
+    # default is off and turning it on is a deliberate act.
+    "PVLLM_ENABLE_V1_MULTIPROCESSING": lambda: bool(
+        int(os.getenv("PVLLM_ENABLE_V1_MULTIPROCESSING", "0"))
+    ),
     # --- plugins -----------------------------------------------------------
     # Mirrors VLLM_PLUGINS: restricts which entry-point plugins are loaded.
     "PVLLM_PLUGINS": _get_plugins,

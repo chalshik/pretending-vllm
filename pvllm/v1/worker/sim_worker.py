@@ -220,6 +220,19 @@ class Worker:
         assert self.model_runner is not None
         return self.model_runner.execute_model(scheduler_output)
 
+    async def execute_model_async(
+        self, scheduler_output: SchedulerOutput
+    ) -> ModelRunnerOutput:
+        """The same boundary crossing, yielding while modeled time passes.
+
+        Upstream has no counterpart: on real hardware the forward pass is launched
+        asynchronously and awaited by CUDA, so there is no interval during which
+        Python holds the loop. Here the interval is the whole simulation, so it has
+        to be awaited explicitly or a real-clock server stops serving during it.
+        """
+        assert self.model_runner is not None
+        return await self.model_runner.execute_model_async(scheduler_output)
+
     def check_health(self) -> None:
         return None
 

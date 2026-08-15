@@ -25,6 +25,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from pvllm import envs
 from pvllm.config import VllmConfig
 from pvllm.engine.arg_utils import AsyncEngineArgs
 from pvllm.logger import init_logger
@@ -32,7 +33,7 @@ from pvllm.outputs import RequestOutput
 from pvllm.sampling_params import SamplingParams
 from pvllm.tokenizers import get_tokenizer
 from pvllm.tokenizers.protocol import TokenizerLike
-from pvllm.v1.engine.core_client import EngineCoreClient, InprocClient
+from pvllm.v1.engine.core_client import EngineCoreClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
 from pvllm.v1.metrics.stats import IterationStats
@@ -61,8 +62,15 @@ class AsyncLLM:
         )
         self.input_processor = InputProcessor(vllm_config, self.tokenizer)
         self.output_processor = OutputProcessor(self.tokenizer, log_stats=log_stats)
+        # R4.2. Off unless asked for, unlike upstream -- see
+        # PVLLM_ENABLE_V1_MULTIPROCESSING in pvllm/envs.py for why the default is
+        # inverted here.
+        multiprocess = envs.PVLLM_ENABLE_V1_MULTIPROCESSING
         self.engine_core: EngineCoreClient = EngineCoreClient.make_client(
-            vllm_config, log_stats=log_stats
+            vllm_config,
+            multiprocess_mode=multiprocess,
+            asyncio_mode=multiprocess,
+            log_stats=log_stats,
         )
 
         self._queues: dict[str, asyncio.Queue[RequestOutput | BaseException]] = {}
@@ -93,9 +101,12 @@ class AsyncLLM:
                         return
                     continue
 
-                assert isinstance(self.engine_core, InprocClient)
                 now = self.engine_core.clock_time
-                engine_core_outputs = self.engine_core.get_output()
+                # Awaited, not called: under a real or scaled clock this is where
+                # the step's modeled duration is spent, and holding the loop through
+                # it would stop the server streaming for exactly as long as the step
+                # it is streaming through.
+                engine_core_outputs = await self.engine_core.get_output_async()
                 for client_outputs in engine_core_outputs.values():
                     request_outputs = self.output_processor.process_outputs(
                         client_outputs.outputs, now, self._pending_stats
@@ -145,7 +156,6 @@ class AsyncLLM:
                 request_id, prompt, sampling_params, priority=priority
             )
             self.engine_core.add_request(engine_request)
-            assert isinstance(self.engine_core, InprocClient)
             self.output_processor.add_request(
                 request_id=request_id,
                 prompt=prompt if isinstance(prompt, str) else None,
@@ -192,7 +202,6 @@ class AsyncLLM:
         return not self.errored
 
     def make_stats(self) -> dict[str, Any]:
-        assert isinstance(self.engine_core, InprocClient)
         return self.engine_core.make_stats()
 
     def take_iteration_stats(self) -> IterationStats:
@@ -206,7 +215,6 @@ class AsyncLLM:
         return stats
 
     async def reset_prefix_cache(self) -> bool:
-        assert isinstance(self.engine_core, InprocClient)
         return self.engine_core.reset_prefix_cache()
 
     async def check_health(self) -> None:

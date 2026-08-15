@@ -51,7 +51,8 @@ def get_tokenizer(
             ) from exc
         raise NotImplementedError(
             "the real Hugging Face tokenizer path lands with the chat template work "
-            "in M3 (requirement R3.1); only MockTokenizer is wired up so far"
+            "with the `realtok` extra (requirement R3.1); only MockTokenizer is "
+            "wired up so far"
         )
 
     raise ValueError(
