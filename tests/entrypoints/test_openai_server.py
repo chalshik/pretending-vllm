@@ -537,3 +537,101 @@ async def test_prefix_cache_counters_move_on_a_shared_prefix(client):
         if ln.startswith("vllm:prefix_cache_hits_total")
     )
     assert hits > 0
+
+
+# --- structured output over HTTP (R15) -------------------------------------
+
+
+async def test_response_format_json_schema_returns_parseable_json(client):
+    """The surface a product actually calls. OpenAI's spelling, nested one level
+    deeper than the vLLM extension's, which is the part people get wrong."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "city": {"type": "string"},
+            "population": {"type": "integer", "minimum": 1},
+        },
+        "required": ["city", "population"],
+    }
+    response = await client.post(
+        "/v1/completions",
+        json={
+            "model": MODEL,
+            "prompt": "describe a city",
+            "max_tokens": 300,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "city", "schema": schema},
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    value = json.loads(response.json()["choices"][0]["text"])
+    assert isinstance(value["city"], str)
+    assert value["population"] >= 1
+
+
+async def test_guided_choice_over_http(client):
+    response = await client.post(
+        "/v1/completions",
+        json={
+            "model": MODEL,
+            "prompt": "yes or no",
+            "max_tokens": 20,
+            "guided_choice": ["yes", "no"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["text"] in ("yes", "no")
+
+
+async def test_chat_completions_honour_response_format(client):
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "give me an object"}],
+            "max_tokens": 200,
+            "response_format": {"type": "json_object"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert isinstance(
+        json.loads(response.json()["choices"][0]["message"]["content"]), dict
+    )
+
+
+async def test_setting_two_constraints_at_once_is_a_400(client):
+    """No defined precedence, so guessing one would return output shaped like the
+    field the caller did not mean."""
+    response = await client.post(
+        "/v1/completions",
+        json={
+            "model": MODEL,
+            "prompt": "x",
+            "guided_choice": ["a", "b"],
+            "guided_regex": r"\d+",
+        },
+    )
+    assert response.status_code == 400
+    assert "only one guided decoding constraint" in response.json()["error"]["message"]
+
+
+async def test_an_unsatisfiable_schema_is_reported_not_hung(client):
+    """A malformed schema has to come back as an error. Hanging would be the worst
+    outcome, and is what happens if the failure never reaches the frontend."""
+    response = await client.post(
+        "/v1/completions",
+        json={
+            "model": MODEL,
+            "prompt": "x",
+            "max_tokens": 50,
+            "guided_json": {
+                "type": "object",
+                "properties": {"n": {"type": "integer", "minimum": 5, "maximum": 1}},
+                "required": ["n"],
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["finish_reason"] == "error"

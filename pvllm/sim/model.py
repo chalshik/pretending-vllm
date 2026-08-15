@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from pvllm.sim.grammar import generate_for_constraint
 from pvllm.sim.model_db import ModelCard
 from pvllm.sim.rng import RngFactory
 from pvllm.tokenizers.mock import BYTE_TOKEN_OFFSET, EOS_TOKEN_ID
@@ -62,6 +63,49 @@ class SimModel:
     #: first use, so the answer cannot drift mid-generation.
     _planned_lengths: dict[str, int] = field(default_factory=dict)
 
+    #: R15. request_id -> the exact token sequence a constrained request must emit.
+    #: See pvllm/sim/grammar.py for why the constraint is satisfied by generating
+    #: conforming text rather than by masking a sampler that has no distribution to
+    #: mask.
+    _constrained_plans: dict[str, list[int]] = field(default_factory=dict)
+
+    # --- structured output (R15) ---------------------------------------------
+
+    def set_constraint(self, request_id: str, kind: str, spec: str) -> list[int]:
+        """Decide what a constrained request will emit, once.
+
+        Cached per request, for the same reason `planned_output_length` is: a
+        request that is preempted and recomputed must produce the same string, or
+        preemption would change the answer -- which R21.1 forbids and a product
+        would experience as a nondeterministic API.
+
+        Encoded here rather than through a tokenizer object because the mock
+        vocabulary is byte-level by construction: ids `BYTE_TOKEN_OFFSET + b` are
+        the 256 byte values, and this module already depends on that layout for EOS.
+        Threading a tokenizer down to the worker would add a second instance of a
+        vocabulary that has to agree with the frontend's exactly -- and two objects
+        that must agree are a worse guarantee than one rule both follow.
+        """
+        planned = self._constrained_plans.get(request_id)
+        if planned is not None:
+            return planned
+
+        text = generate_for_constraint(
+            kind, spec, self.rng_factory.for_request(request_id)
+        )
+        planned = [BYTE_TOKEN_OFFSET + byte for byte in text.encode("utf-8")]
+        if planned and max(planned) >= self.model.vocab_size:
+            raise ValueError(
+                f"the constrained output for {request_id} needs token ids up to "
+                f"{max(planned)}, beyond this model card's vocab_size of "
+                f"{self.model.vocab_size}"
+            )
+        self._constrained_plans[request_id] = planned
+        return planned
+
+    def constrained_plan(self, request_id: str) -> list[int] | None:
+        return self._constrained_plans.get(request_id)
+
     # --- output length -------------------------------------------------------
 
     def planned_output_length(self, request_id: str, max_tokens: int) -> int:
@@ -74,6 +118,22 @@ class SimModel:
         planned = self._planned_lengths.get(request_id)
         if planned is not None:
             return planned
+
+        # R15. A constrained request's length is the constraint's, not the workload
+        # policy's: the output is a JSON document or a regex match, and stopping
+        # partway through would emit something that does not parse. Truncation by
+        # `max_tokens` still applies below, and is exactly what real vLLM does to a
+        # schema that does not fit.
+        constrained = self._constrained_plans.get(request_id)
+        if constrained is not None:
+            # The content, *plus one* for the EOS that ends the request. Without the
+            # +1 the EOS branch in `sample_token` fires one position early and eats
+            # the document's last character -- a JSON object missing its closing
+            # brace, which parses nowhere and looks like a schema bug rather than an
+            # off-by-one.
+            length = min(len(constrained) + 1, max_tokens)
+            self._planned_lengths[request_id] = length
+            return length
 
         rng = self.rng_factory.for_request(request_id)
         policy = self.output_length_policy
@@ -122,6 +182,17 @@ class SimModel:
         planned = self.planned_output_length(request_id, max_tokens)
         if planned < max_tokens and position + 1 >= planned:
             return EOS_TOKEN_ID
+
+        # R15. The constraint decides the content. Positions past the end of the
+        # plan cannot be reached: `planned_output_length` caps the request at the
+        # plan's length, so the EOS branch above fires first -- unless max_tokens
+        # truncated it, in which case the request ends on the length cap and the
+        # output is a prefix that does not parse. That is upstream's behavior too,
+        # and a client testing "my schema does not fit in max_tokens" needs to see
+        # it rather than a quietly completed document.
+        constrained = self._constrained_plans.get(request_id)
+        if constrained is not None:
+            return constrained[position]
 
         rng = self.rng_factory.for_request(request_id)
         if self.content_policy == "pseudoword":

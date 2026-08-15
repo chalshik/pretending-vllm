@@ -133,6 +133,21 @@ class Request:
         self.cache_salt = cache_salt
         self.mm_features: list[Any] = []
 
+        # R15. `None` when unconstrained, which is what `use_structured_output`
+        # tests -- so the whole grammar path costs one attribute check on the
+        # overwhelmingly common request.
+        from pvllm.v1.structured_output.request import StructuredOutputRequest
+
+        self.structured_output_request = StructuredOutputRequest.from_sampling_params(
+            sampling_params
+        )
+        if self.structured_output_request is not None:
+            # Admission is blocked until the grammar compiles. Set here rather than
+            # by the scheduler so the state is right from the moment the request
+            # exists -- a request briefly WAITING before anyone looked would be
+            # admissible in that window.
+            self.status = RequestStatus.WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR
+
         #: True while this request is scheduled as a non-final prefill chunk (R5.4).
         self.is_prefill_chunk = False
         #: R5.5. Incremented on every preemption by recompute.
@@ -233,7 +248,7 @@ class Request:
 
     @property
     def use_structured_output(self) -> bool:
-        return False  # R15 lands in M4.
+        return self.structured_output_request is not None
 
     # --- lifecycle -----------------------------------------------------------
 

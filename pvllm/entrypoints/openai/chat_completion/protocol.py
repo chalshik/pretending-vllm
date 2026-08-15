@@ -14,6 +14,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from pvllm.entrypoints.openai.completion.protocol import StreamOptions, UsageInfo
+from pvllm.entrypoints.openai.structured_outputs import build_structured_outputs
 from pvllm.sampling_params import RequestOutputKind, SamplingParams
 
 
@@ -53,6 +54,18 @@ class ChatCompletionRequest(BaseModel):
     add_generation_prompt: bool = True
     priority: int = 0
 
+    #: R15. OpenAI's own constraint field.
+    response_format: dict[str, Any] | None = None
+    #: R15. vLLM's guided-decoding extensions. Products targeting vLLM use these
+    #: rather than response_format, so both surfaces are accepted.
+    guided_json: str | dict[str, Any] | None = None
+    guided_regex: str | None = None
+    guided_choice: list[str] | None = None
+    guided_grammar: str | None = None
+    structural_tag: str | None = None
+    guided_whitespace_pattern: str | None = None
+    guided_decoding_backend: str | None = None
+
     def to_sampling_params(self, streaming: bool) -> SamplingParams:
         # `max_completion_tokens` supersedes `max_tokens`, which OpenAI deprecated.
         # Preferring the new field matters: a client sending both means the new one.
@@ -78,6 +91,16 @@ class ChatCompletionRequest(BaseModel):
             logit_bias={int(k): v for k, v in (self.logit_bias or {}).items()} or None,
             output_kind=(
                 RequestOutputKind.DELTA if streaming else RequestOutputKind.FINAL_ONLY
+            ),
+            structured_outputs=build_structured_outputs(
+                response_format=self.response_format,
+                guided_json=self.guided_json,
+                guided_regex=self.guided_regex,
+                guided_choice=self.guided_choice,
+                guided_grammar=self.guided_grammar,
+                structural_tag=self.structural_tag,
+                guided_whitespace_pattern=self.guided_whitespace_pattern,
+                guided_decoding_backend=self.guided_decoding_backend,
             ),
         )
 

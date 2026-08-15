@@ -24,13 +24,16 @@ from typing import Any
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
 from pvllm.timebase import Clock
+from pvllm.tokenizers import get_tokenizer
 from pvllm.tracing import TraceSink
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.core.sched.scheduler import Scheduler
 from pvllm.v1.engine import (
     EngineCoreEventType,
+    EngineCoreOutput,
     EngineCoreOutputs,
     EngineCoreRequest,
+    FinishReason,
 )
 from pvllm.v1.executor.abstract import Executor
 from pvllm.v1.kv_cache_interface import (
@@ -40,6 +43,7 @@ from pvllm.v1.kv_cache_interface import (
 )
 from pvllm.v1.outputs import ModelRunnerOutput
 from pvllm.v1.request import Request, RequestStatus
+from pvllm.v1.structured_output import StructuredOutputManager
 
 logger = init_logger(__name__)
 
@@ -80,6 +84,18 @@ class EngineCore:
             trace=self.trace,
         )
         self.kv_cache_config = kv_cache_config
+
+        # R15. Owned here rather than by the scheduler: it compiles on a thread
+        # pool and holds a tokenizer, neither of which belongs to a component whose
+        # job is deciding what runs next.
+        self.structured_output_manager = StructuredOutputManager(vllm_config)
+        self.structured_output_manager.set_tokenizer(
+            get_tokenizer(
+                vllm_config.model_config.tokenizer or vllm_config.model_config.model,
+                tokenizer_mode=vllm_config.model_config.tokenizer_mode,
+                vocab_size=vllm_config.model_config.get_vocab_size(),
+            )
+        )
 
         self.step_index = 0
         self._request_counter = 0
@@ -147,6 +163,11 @@ class EngineCore:
         if self.log_stats:
             req.record_event(EngineCoreEventType.QUEUED, arrival_time)
 
+        # R15. Started before the request joins the queue, so compilation overlaps
+        # the wait rather than beginning when the scheduler first looks at it.
+        if req.use_structured_output:
+            self.structured_output_manager.grammar_init(req)
+
         self.scheduler.add_request(req)
         self.trace.emit(
             "request",
@@ -208,7 +229,66 @@ class EngineCore:
         scheduled_at = self.clock.time()
         for request in self.scheduler.take_newly_scheduled():
             request.record_event(EngineCoreEventType.SCHEDULED, scheduled_at)
+
+        # R15. Computed between scheduling and execution, as upstream: the mask
+        # depends on how far each grammar has advanced, which is only settled once
+        # this step's batch is known. In `_plan_step` rather than in each of `step`
+        # and `step_async`, for the same reason those two share this method at all.
+        if scheduler_output.has_structured_output_requests:
+            scheduler_output.grammar_bitmask = (
+                self.structured_output_manager.grammar_bitmask(
+                    self.scheduler.requests,
+                    scheduler_output.structured_output_request_ids,
+                )
+            )
         return scheduler_output
+
+    def _finish_grammar_failures(self) -> dict[int, list[EngineCoreOutput]]:
+        """End requests whose grammar could not compile. R15.
+
+        With FINISHED_ERROR rather than by raising: a malformed schema is a client
+        error belonging to one request, and taking down the engine step that noticed
+        it would let one bad request deny service to every other.
+
+        Returns an output per failed request, keyed by client, because ending it in
+        the scheduler is only half the job. The frontend is still holding the
+        request's queue, and a caller waiting on it would wait forever -- the failure
+        has to travel the same path a completion does.
+        """
+        failed = self.scheduler.take_grammar_compile_errors()
+        outputs: dict[int, list[EngineCoreOutput]] = {}
+        if not failed:
+            return outputs
+
+        for request_id in sorted(failed):
+            request = self.scheduler.requests.get(request_id)
+            reason = "the request's grammar failed to compile"
+            client_index = 0
+            if request is not None:
+                client_index = request.client_index
+                if request.structured_output_request is not None:
+                    error = request.structured_output_request.grammar
+                    if isinstance(error, Exception):
+                        reason = f"{type(error).__name__}: {error}"
+            logger.warning("request %s failed: %s", request_id, reason)
+            self.trace.emit(
+                "request",
+                t=self.clock.time(),
+                request_id=request_id,
+                event="finished",
+                finish_reason="error",
+                error=reason,
+            )
+            outputs.setdefault(client_index, []).append(
+                EngineCoreOutput(
+                    request_id=request_id,
+                    new_token_ids=[],
+                    finish_reason=FinishReason.ERROR,
+                    stop_reason=reason,
+                )
+            )
+        self.scheduler.finish_requests(sorted(failed), RequestStatus.FINISHED_ERROR)
+        return outputs
 
     def _finish_step(
         self, scheduler_output: SchedulerOutput, model_output: ModelRunnerOutput
@@ -241,6 +321,19 @@ class EngineCore:
                         num_cached_tokens=output.num_cached_tokens,
                     )
 
+        # After the step, so a grammar that failed while this step ran is dealt with
+        # now rather than a step later. Merged into this step's outputs so the
+        # frontend hears about it on the same pass -- a failure delivered nowhere is
+        # a request that hangs.
+        for client_index, failures in self._finish_grammar_failures().items():
+            existing = engine_core_outputs.get(client_index)
+            if existing is None:
+                engine_core_outputs[client_index] = EngineCoreOutputs(
+                    engine_index=client_index, outputs=failures, timestamp=timestamp
+                )
+            else:
+                existing.outputs.extend(failures)
+
         self.step_index += 1
         model_executed = scheduler_output.total_num_scheduled_tokens > 0
         return engine_core_outputs, model_executed
@@ -267,6 +360,7 @@ class EngineCore:
 
     def shutdown(self) -> None:
         """R4.5."""
+        self.structured_output_manager.shutdown()
         self.scheduler.shutdown()
         self.executor.shutdown()
         self.trace.close()

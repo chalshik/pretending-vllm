@@ -121,6 +121,18 @@ class SimPlatform(Platform):
         return build_clock(mode, time_scale=time_scale)  # type: ignore[arg-type]
 
     @classmethod
+    def build_structured_output_backend(
+        cls, vllm_config: Any, *, tokenizer: Any, vocab_size: int
+    ) -> Any:
+        """R15. Upstream resolves a compiled grammar engine here; the simulated one
+        validates constraints and lets `SimModel` satisfy them."""
+        from pvllm.sim.structured_output import SimStructuredOutputBackend
+
+        return SimStructuredOutputBackend(
+            vllm_config=vllm_config, tokenizer=tokenizer, vocab_size=vocab_size
+        )
+
+    @classmethod
     def build_trace_sink(
         cls,
         path: str | None,

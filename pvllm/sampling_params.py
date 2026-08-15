@@ -32,6 +32,71 @@ class RequestOutputKind(IntEnum):
 
 
 @dataclass
+class StructuredOutputsParams:
+    """A grammar constraint on generation. R15.
+
+    Upstream's field set, and upstream's mutual-exclusion rule: exactly one
+    constraint, because they compile to different grammars and there is no defined
+    meaning for two at once.
+    """
+
+    json: str | dict[str, Any] | None = None
+    regex: str | None = None
+    choice: list[str] | None = None
+    grammar: str | None = None
+    json_object: bool | None = None
+    #: Options that shape the grammar rather than choosing it.
+    disable_any_whitespace: bool = False
+    disable_additional_properties: bool = False
+    whitespace_pattern: str | None = None
+    structural_tag: str | None = None
+
+    #: Resolved by the input processor, never by a caller. Mirrors upstream, where
+    #: the same field carries the same warning.
+    _backend: str | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        count = sum(
+            constraint is not None
+            for constraint in (
+                self.json,
+                self.regex,
+                self.choice,
+                self.grammar,
+                self.json_object,
+                self.structural_tag,
+            )
+        )
+        if count > 1:
+            raise ValueError(
+                f"only one structured output constraint may be set, but "
+                f"{count} were: {self._named_constraints()}"
+            )
+        if count < 1:
+            raise ValueError(
+                "a structured output constraint must set exactly one of json, "
+                "regex, choice, grammar, json_object, or structural_tag"
+            )
+
+    def _named_constraints(self) -> list[str]:
+        return [
+            name
+            for name in (
+                "json",
+                "regex",
+                "choice",
+                "grammar",
+                "json_object",
+                "structural_tag",
+            )
+            if getattr(self, name) is not None
+        ]
+
+    def all_constraints_none(self) -> bool:
+        return not self._named_constraints()
+
+
+@dataclass
 class SamplingParams:
     """Parameters for text generation."""
 
@@ -60,6 +125,9 @@ class SamplingParams:
     allowed_token_ids: list[int] | None = None
     output_kind: RequestOutputKind = RequestOutputKind.CUMULATIVE
     extra_args: dict[str, Any] | None = None
+    #: R15. `None` means unconstrained, which is the overwhelmingly common case and
+    #: the reason the whole structured-output path is skipped when it is unset.
+    structured_outputs: StructuredOutputsParams | None = None
 
     #: Populated by the processor from `stop`; kept separate so the scheduler's
     #: stop-string checker does not re-normalize on every step.

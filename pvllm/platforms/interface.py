@@ -184,6 +184,13 @@ class Platform:
         raise NotImplementedError
 
     @classmethod
+    def build_structured_output_backend(
+        cls, vllm_config: Any, *, tokenizer: Any, vocab_size: int
+    ) -> Any:
+        """The grammar backend (R15). Simulator-supplied, like the clock."""
+        raise NotImplementedError
+
+    @classmethod
     def get_punica_wrapper(cls) -> str:
         """Fully-qualified name of the LoRA punica wrapper class (P3)."""
         raise NotImplementedError(

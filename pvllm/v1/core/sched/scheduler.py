@@ -131,6 +131,15 @@ class Scheduler:
         #: the queue wait is the interval between this stamp and the QUEUED one.
         self.pending_scheduled: list[Request] = []
 
+        # R15. Requests set aside because something they need is not ready yet --
+        # today only a compiling grammar. A separate queue rather than a flag,
+        # because they must not hold the head of the waiting queue while they wait,
+        # and they must not lose their place relative to each other.
+        self.skipped_waiting = create_request_queue(self.policy)
+        #: Requests whose grammar failed to compile, for the core to finish with an
+        #: error. Held rather than raised: a bad schema fails its own request.
+        self.grammar_compile_error_reqs: set[str] = set()
+
     # --- admission -----------------------------------------------------------
 
     def add_request(self, request: Request) -> None:
@@ -143,15 +152,26 @@ class Scheduler:
         self.requests[request.request_id] = request
 
     def has_requests(self) -> bool:
-        """Whether any work remains -- running, waiting, or awaiting cleanup."""
-        return bool(self.running) or bool(self.waiting) or bool(self.finished_req_ids)
+        """Whether any work remains -- running, waiting, or awaiting cleanup.
+
+        `skipped_waiting` counts: a request set aside for a compiling grammar is
+        still work, and an engine that reported otherwise would stop stepping and
+        never come back to it.
+        """
+        return (
+            bool(self.running)
+            or bool(self.waiting)
+            or bool(self.skipped_waiting)
+            or bool(self.finished_req_ids)
+        )
 
     def get_num_unfinished_requests(self) -> int:
-        return len(self.waiting) + len(self.running)
+        return len(self.waiting) + len(self.running) + len(self.skipped_waiting)
 
     def get_request_counts(self) -> tuple[int, int]:
-        """`(running, waiting)`, for the metrics."""
-        return len(self.running), len(self.waiting)
+        """`(running, waiting)`, for the metrics. A grammar-blocked request is
+        waiting as far as anyone outside the scheduler is concerned."""
+        return len(self.running), len(self.waiting) + len(self.skipped_waiting)
 
     def get_kv_cache_usage(self) -> float:
         return self.kv_cache_manager.usage
@@ -271,6 +291,20 @@ class Scheduler:
 
                 request = self.waiting.peek_request()
 
+                # R15. A request whose grammar is still compiling cannot be admitted:
+                # the first sampled token has to be constrained, and there is nothing
+                # to constrain it with yet. Moved aside rather than left at the head,
+                # so one slow schema does not block every request behind it -- which
+                # is the whole reason compilation is asynchronous.
+                blocked = (
+                    request.status
+                    == RequestStatus.WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR
+                )
+                if blocked and not self._promote_grammar_request(request):
+                    self.waiting.pop_request()
+                    self.skipped_waiting.add_request(request)
+                    continue
+
                 # R6.4. On the real path, so admission accounting is identical
                 # whether or not the cache is enabled.
                 new_computed_blocks, num_new_local_computed_tokens = (
@@ -342,6 +376,11 @@ class Scheduler:
             f"{self.max_num_running_reqs} (R5.3)"
         )
 
+        # R15. Set-aside requests go back before the step ends, so the next
+        # step reconsiders them -- otherwise a grammar that compiles during this
+        # step would not be noticed until something else disturbed the queue.
+        self._restore_skipped_waiting()
+
         num_common_prefix_blocks = [0] * len(self.kv_cache_config.kv_cache_groups)
         if self.running:
             num_common_prefix_blocks = (
@@ -364,6 +403,25 @@ class Scheduler:
             scheduled_running_reqs, num_scheduled_tokens, req_to_new_blocks
         )
 
+        # R15. Which of this step's requests are constrained, and which bitmask row
+        # belongs to each. Keyed by request id and assigned in sorted id order rather
+        # than by batch position: the worker reorders the batch for its own reasons
+        # (see sort_batch_req_ids), so a row index derived from the scheduler's
+        # ordering would address the wrong request's row about half the time.
+        #
+        # A request on a non-final prefill chunk is excluded -- it samples no token
+        # this step, so constraining it would consume a grammar position for a token
+        # that never exists. Upstream excludes it for the same reason.
+        constrained = sorted(
+            request_id
+            for request_id in num_scheduled_tokens
+            if self.requests[request_id].use_structured_output
+            and not self.requests[request_id].is_prefill_chunk
+        )
+        structured_output_request_ids = {
+            request_id: row for row, request_id in enumerate(constrained)
+        }
+
         scheduler_output = SchedulerOutput(
             scheduled_new_reqs=new_reqs_data,
             scheduled_cached_reqs=cached_reqs_data,
@@ -372,6 +430,8 @@ class Scheduler:
             scheduled_spec_decode_tokens={},
             scheduled_encoder_inputs={},
             num_common_prefix_blocks=num_common_prefix_blocks,
+            has_structured_output_requests=bool(structured_output_request_ids),
+            structured_output_request_ids=structured_output_request_ids,
             finished_req_ids=self.finished_req_ids,
             free_encoder_mm_hashes=[],
             preempted_req_ids={r.request_id for r in preempted_reqs} or None,
@@ -620,6 +680,47 @@ class Scheduler:
         """Hand the last step's record to the engine core for stamping."""
         record, self.pending_step_record = self.pending_step_record, None
         return record
+
+    def _promote_grammar_request(self, request: Request) -> bool:
+        """Whether a grammar-blocked request is ready to be admitted. R15.
+
+        Mirrors upstream's promotion check, including the part that matters most: a
+        compilation *failure* does not raise here. It marks the request so the engine
+        core can finish it with an error, and returns False so admission moves on --
+        one malformed schema must not take down the step that noticed it.
+        """
+        structured = request.structured_output_request
+        if structured is None:
+            request.status = RequestStatus.WAITING
+            return True
+        grammar = structured.grammar
+        if grammar is None:
+            return False
+        if isinstance(grammar, Exception):
+            self.grammar_compile_error_reqs.add(request.request_id)
+            return False
+        request.status = (
+            RequestStatus.PREEMPTED
+            if request.num_preemptions
+            else RequestStatus.WAITING
+        )
+        return True
+
+    def _restore_skipped_waiting(self) -> None:
+        """Return set-aside requests to the head of the waiting queue. R15.
+
+        At the head, not the back: they arrived before everything now queued behind
+        them, and sending them to the back would let a steady stream of unconstrained
+        requests starve every constrained one indefinitely.
+        """
+        if self.skipped_waiting:
+            self.waiting.prepend_requests(self.skipped_waiting)
+            self.skipped_waiting = create_request_queue(self.policy)
+
+    def take_grammar_compile_errors(self) -> set[str]:
+        """Hand the core the requests whose grammar failed, and forget them."""
+        failed, self.grammar_compile_error_reqs = self.grammar_compile_error_reqs, set()
+        return failed
 
     def take_newly_scheduled(self) -> list[Request]:
         """Hand this step's admissions to the core so it can date them.

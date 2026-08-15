@@ -20,6 +20,8 @@ are the same computation upstream performs; only the forward pass is replaced.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from pvllm.config import VllmConfig
@@ -135,6 +137,21 @@ class SimModelRunner:
             # A resumed request may already hold blocks, so install rather than
             # append.
             self.block_tables.set_block_ids(req_idx, new_req.block_ids)
+
+            # R15. The constraint crosses the boundary inside `sampling_params`,
+            # exactly as it does upstream -- no extra channel, and nothing above the
+            # boundary needs to know what the simulated model does with it.
+            self._maybe_set_constraint(new_req.req_id, new_req.sampling_params)
+
+    def _maybe_set_constraint(self, req_id: str, sampling_params: Any) -> None:
+        """Hand a constrained request's grammar to the model. R15."""
+        params = getattr(sampling_params, "structured_outputs", None)
+        if params is None or self.sim_model.constrained_plan(req_id) is not None:
+            return
+        from pvllm.v1.structured_output.request import get_structured_output_key
+
+        kind, spec = get_structured_output_key(params)
+        self.sim_model.set_constraint(req_id, kind.name.lower(), spec)
 
     def update_requests(self, scheduler_output: SchedulerOutput) -> None:
         """Patch the state of requests the worker already holds. R7.3.
