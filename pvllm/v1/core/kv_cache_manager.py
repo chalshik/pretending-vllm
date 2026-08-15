@@ -92,15 +92,34 @@ class KVCacheManager:
     ) -> None:
         self.kv_cache_config = kv_cache_config
         self.max_model_len = max_model_len
-        self.enable_caching = enable_caching
         self.log_stats = log_stats
 
         self.block_size = kv_cache_config.block_size
+        from pvllm.v1.kv_cache_interface import SlidingWindowSpec
+
+        # R6.7. A windowed group needs the null block to stand in for evicted slots,
+        # and prefix caching is off for the whole pool when any group slides: a
+        # cached block is only reusable if the prefix leading to it is still
+        # attended to, and inside a window it usually is not.
+        self.has_sliding_window = any(
+            isinstance(group.kv_cache_spec, SlidingWindowSpec)
+            for group in kv_cache_config.kv_cache_groups
+        )
+        if self.has_sliding_window and enable_caching:
+            logger.info(
+                "Prefix caching disabled: this model has sliding-window attention, "
+                "and a cached block is only reusable while the prefix leading to it "
+                "is still inside the window (R6.7)."
+            )
+            enable_caching = False
+
         self.block_pool = BlockPool(
             kv_cache_config.num_blocks,
             enable_caching=enable_caching,
             enable_kv_cache_events=enable_kv_cache_events,
+            reserve_null_block=self.has_sliding_window,
         )
+        self.enable_caching = enable_caching
         self.coordinator = get_kv_cache_coordinator(
             kv_cache_config, self.block_pool, enable_caching
         )
@@ -260,6 +279,20 @@ class KVCacheManager:
         )
 
     # --- release -------------------------------------------------------------
+
+    def remove_skipped_blocks(self, request: Request) -> None:
+        """Release blocks that have fallen out of a sliding window. R6.7.
+
+        A no-op for a full-attention model, which is why it costs one flag check on
+        the common path. For a windowed one it is the whole mechanism: without it a
+        long conversation holds every block it ever touched, and the bounded-KV
+        property that makes windows worth having would not exist.
+        """
+        if not self.has_sliding_window:
+            return
+        self.coordinator.remove_skipped_blocks(
+            request.request_id, request.num_computed_tokens
+        )
 
     def free(self, request: Request) -> None:
         """Release everything a request holds.

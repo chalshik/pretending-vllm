@@ -562,6 +562,9 @@ class Scheduler:
             request = self.requests[req_id]
             request.num_computed_tokens += num_scheduled
             request.is_prefill_chunk = request.num_computed_tokens < request.num_tokens
+            # R6.7. After the count advances, so the window is measured against what
+            # the request has actually computed. A no-op without a windowed group.
+            self.kv_cache_manager.remove_skipped_blocks(request)
 
         # Cleared only after the output has been built, so the worker still sees the
         # ids it needs to drop.

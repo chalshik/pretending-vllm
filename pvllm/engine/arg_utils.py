@@ -63,6 +63,9 @@ class EngineArgs:
     kv_cache_dtype: str = "auto"
     enable_prefix_caching: bool = True
     prefix_caching_hash_algo: str = "sha256"
+    #: R6.7. Attend to only the last N tokens. Bounds KV per request, so capacity
+    #: stops depending on conversation length.
+    sliding_window: int | None = None
 
     # --- scheduler -----------------------------------------------------------
     max_num_batched_tokens: int | None = None
@@ -150,6 +153,7 @@ class EngineArgs:
             num_gpu_blocks_override=self.num_gpu_blocks_override,
             enable_prefix_caching=self.enable_prefix_caching,
             prefix_caching_hash_algo=self.prefix_caching_hash_algo,
+            sliding_window=self.sliding_window,
         )
 
         parallel_config = ParallelConfig(
@@ -231,6 +235,7 @@ class EngineArgs:
         cache.add_argument("--gpu-memory-utilization", type=float, default=0.92)
         cache.add_argument("--num-gpu-blocks-override", type=int, default=None)
         cache.add_argument("--kv-cache-dtype", default="auto")
+        cache.add_argument("--sliding-window", type=int, default=None)
         cache.add_argument(
             "--no-enable-prefix-caching",
             dest="enable_prefix_caching",

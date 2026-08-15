@@ -51,6 +51,7 @@ class BlockPool:
         num_gpu_blocks: int,
         enable_caching: bool = False,
         enable_kv_cache_events: bool = False,
+        reserve_null_block: bool = False,
     ) -> None:
         if num_gpu_blocks <= 0:
             raise ValueError(
@@ -68,7 +69,30 @@ class BlockPool:
         self.blocks: list[KVCacheBlock] = [
             KVCacheBlock(block_id=i) for i in range(num_gpu_blocks)
         ]
-        self.free_block_queue = FreeKVCacheBlockQueue(self.blocks)
+        # R6.7. Block 0 becomes the null block when any group slides: a placeholder
+        # a request's block table points at once a block has fallen out of the window
+        # and been freed. The table has to keep its length, because positions index
+        # into it -- a shorter table would renumber every token after the evicted one.
+        #
+        # Reserved *only* when something needs it. Doing it unconditionally would
+        # shift every block id by one in every configuration, which changes nothing
+        # about behaviour and everything about a recorded trace.
+        self.null_block: KVCacheBlock | None = None
+        if reserve_null_block:
+            if num_gpu_blocks < 2:
+                raise ValueError(
+                    f"num_gpu_blocks must be at least 2 when a sliding-window group "
+                    f"is present, got {num_gpu_blocks}: block 0 is reserved as the "
+                    f"null block, leaving nothing to allocate"
+                )
+            self.null_block = self.blocks[0]
+            self.null_block.is_null = True
+            # Pinned above zero so it can never be handed out or evicted.
+            self.null_block.ref_cnt = 1
+
+        self.free_block_queue = FreeKVCacheBlockQueue(
+            self.blocks[1:] if reserve_null_block else self.blocks
+        )
 
         # Populated in M2. Maps a block hash to the blocks holding that content.
         self.cached_block_hash_to_block: dict[
@@ -128,6 +152,13 @@ class BlockPool:
         """
         blocks_with_hash: list[KVCacheBlock] = []
         blocks_without_hash: list[KVCacheBlock] = []
+        # R6.7. A windowed request's block table holds null-block placeholders where
+        # blocks have already been evicted, and freeing the request hands the whole
+        # table back. The null block is shared by every such request and pinned, so
+        # dropping a reference to it would eventually free it to the queue and let it
+        # be allocated to somebody -- two requests holding one block for different
+        # tokens.
+        ordered_blocks = [block for block in ordered_blocks if not block.is_null]
 
         for block in ordered_blocks:
             block.ref_cnt -= 1
@@ -214,6 +245,11 @@ class BlockPool:
             self.cached_block_hash_to_block.setdefault(key, {})[block.block_id] = block
 
     # --- introspection -------------------------------------------------------
+
+    @property
+    def num_usable_blocks(self) -> int:
+        """Blocks a request can be given -- everything but the null block."""
+        return self.num_gpu_blocks - (1 if self.null_block is not None else 0)
 
     def get_num_free_blocks(self) -> int:
         return self.free_block_queue.num_free_blocks

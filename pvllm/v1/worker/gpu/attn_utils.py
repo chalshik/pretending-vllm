@@ -14,7 +14,11 @@ import numpy as np
 
 from pvllm.config import VllmConfig
 from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
-from pvllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheSpec
+from pvllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheSpec,
+    SlidingWindowSpec,
+)
 from pvllm.v1.worker.gpu.block_table import BlockTables
 from pvllm.v1.worker.gpu.input_batch import InputBatch
 
@@ -32,6 +36,28 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
 
     kv_cache_dtype = cache_config.resolved_cache_dtype or model_config.resolved_dtype
     from pvllm.sim.model_db import DTYPE_BYTES
+
+    # R6.7. A configured window makes every layer a windowed one -- which is what a
+    # uniformly-windowed model (Mistral-style) looks like. Models that *mix* full and
+    # windowed layers (Gemma-2 style) need two groups with a unified page size, and
+    # `_initialize_kv_caches` refuses them by name rather than collapsing them into
+    # one group, which would report the wrong capacity for both halves.
+    if cache_config.sliding_window is not None:
+        windowed = SlidingWindowSpec(
+            block_size=cache_config.block_size,
+            num_kv_heads=model_config.get_num_kv_heads(
+                parallel_config.tensor_parallel_size
+            ),
+            head_size=model_config.get_head_size(),
+            dtype=kv_cache_dtype,
+            dtype_bytes=DTYPE_BYTES[kv_cache_dtype],
+            sliding_window=cache_config.sliding_window,
+        )
+        num_layers = model_config.get_num_layers(
+            parallel_config.tensor_parallel_size,
+            parallel_config.pipeline_parallel_size,
+        )
+        return {f"layer.{i}": windowed for i in range(num_layers)}
 
     spec = FullAttentionSpec(
         block_size=cache_config.block_size,

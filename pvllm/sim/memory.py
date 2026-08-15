@@ -185,6 +185,7 @@ def compute_memory_profile(
     graph_bytes: int = 0,
     num_gpu_blocks_override: int | None = None,
     lora_bytes: int = 0,
+    sliding_window: int | None = None,
 ) -> MemoryProfile:
     """Derive the KV pool and `num_gpu_blocks`. R10.2, R10.5, R10.6."""
     capacity = device.memory_bytes
@@ -240,17 +241,23 @@ def compute_memory_profile(
     # R10.6: a max_model_len that cannot fit one request is a startup error. Left to
     # request time it would look like a request that queues forever for capacity that
     # will never exist.
-    blocks_for_one_request = (max_model_len + block_size - 1) // block_size
+    # R6.7. A windowed request never holds more than its window, so that -- not
+    # max_model_len -- is what the pool has to fit. This is the whole capacity
+    # argument for sliding windows: a 128k-context model with a 4k window needs 4k of
+    # KV per request, not 128k.
+    tokens_for_one_request = min(max_model_len, sliding_window or max_model_len)
+    blocks_for_one_request = (tokens_for_one_request + block_size - 1) // block_size
     if num_gpu_blocks < blocks_for_one_request:
         raise SimOutOfMemoryError(
             f"The KV cache holds {num_gpu_blocks} blocks, but a single request at "
-            f"max_model_len={max_model_len} needs {blocks_for_one_request} "
+            f"max_model_len={max_model_len} (window {tokens_for_one_request}) needs "
+            f"{blocks_for_one_request} "
             f"(block_size={block_size}). No request could ever be served.\n"
             f"Try: lower max_model_len, raise gpu_memory_utilization, or pick a "
             f"larger device card."
         )
 
-    max_concurrency = num_gpu_blocks * block_size / max_model_len
+    max_concurrency = num_gpu_blocks * block_size / tokens_for_one_request
 
     return MemoryProfile(
         capacity_bytes=capacity,

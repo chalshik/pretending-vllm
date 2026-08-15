@@ -112,7 +112,6 @@ def test_invalid_values_are_rejected(factory, match):
     [
         (lambda: ParallelConfig(data_parallel_size=2), "data parallel"),
         (lambda: ParallelConfig(enable_expert_parallel=True), "expert parallelism"),
-        (lambda: CacheConfig(sliding_window=4096), "sliding-window"),
         (lambda: SchedulerConfig(async_scheduling=True), "async scheduling"),
     ],
 )

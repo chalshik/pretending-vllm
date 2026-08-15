@@ -44,7 +44,34 @@ class KVCacheSpec:
 
 @dataclass(frozen=True)
 class FullAttentionSpec(KVCacheSpec):
-    """A standard causal attention layer. The only spec until M4."""
+    """A standard causal attention layer: every token is attended to, forever."""
+
+
+@dataclass(frozen=True)
+class SlidingWindowSpec(KVCacheSpec):
+    """An attention layer that only attends to the last `sliding_window` tokens. R6.7.
+
+    The consequential difference is not the attention pattern -- it is that KV per
+    request stops growing with context. A model with a 128k context and a 4k window
+    holds 4k tokens of KV per request however long the conversation gets, so capacity
+    is bounded by concurrency rather than by conversation length. That is a different
+    capacity planning problem, and it is the reason this is modeled rather than
+    approximated.
+    """
+
+    sliding_window: int = 0
+
+    def __post_init__(self) -> None:
+        if self.sliding_window < 1:
+            raise ValueError(
+                f"sliding_window must be positive, got {self.sliding_window}"
+            )
+
+    @property
+    def type_id(self) -> str:
+        # The window is part of the identity: two layers with different windows
+        # cannot share a block table, because they free blocks at different points.
+        return f"{super().type_id}_sw{self.sliding_window}"
 
 
 @dataclass

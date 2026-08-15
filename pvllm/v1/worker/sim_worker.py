@@ -171,6 +171,7 @@ class Worker:
             pp_size=self.parallel_config.pipeline_parallel_size,
             num_gpu_blocks_override=self.cache_config.num_gpu_blocks_override,
             lora_bytes=self._lora_bytes(),
+            sliding_window=self.cache_config.sliding_window,
         )
         logger.info("%s", self.memory_profile.summary())
         # The *block count* is what the profile resolved -- including any

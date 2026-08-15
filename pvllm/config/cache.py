@@ -53,10 +53,9 @@ class CacheConfig:
                 f"unsupported prefix_caching_hash_algo "
                 f"{self.prefix_caching_hash_algo!r}; expected 'sha256' or 'builtin'"
             )
-        if self.sliding_window is not None:
-            raise NotImplementedError(
-                "sliding-window attention needs multiple KV cache groups "
-                "(requirement R6.7), which lands in M4"
+        if self.sliding_window is not None and self.sliding_window < 1:
+            raise ValueError(
+                f"sliding_window must be positive, got {self.sliding_window}"
             )
 
     @property

@@ -82,6 +82,13 @@ class KVCacheCoordinator:
             blocks.extend(manager.pop_blocks_for_free(request_id))
         return blocks
 
+    def remove_skipped_blocks(self, request_id: str, num_computed_tokens: int) -> None:
+        """Fan the window eviction out to every group that has one. R6.7."""
+        for manager in self.single_type_managers:
+            remove = getattr(manager, "remove_skipped_blocks", None)
+            if remove is not None:
+                remove(request_id, num_computed_tokens)
+
     def free(self, request_id: str) -> None:
         """Release a request's blocks in every group, tail first (R6.6)."""
         for manager in self.single_type_managers:
