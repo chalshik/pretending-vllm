@@ -16,10 +16,12 @@ answerable without owning the hardware.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pvllm.logger import init_logger
 from pvllm.platforms.interface import Platform, PlatformEnum
+from pvllm.timebase import Clock
+from pvllm.tracing import TraceSink
 
 if TYPE_CHECKING:
     from pvllm.config import VllmConfig
@@ -107,6 +109,39 @@ class SimPlatform(Platform):
     @classmethod
     def get_device_communicator_cls(cls) -> str:
         return "pvllm.distributed.sim_communicator.SimCommunicator"
+
+    # --- runtime services --------------------------------------------------
+
+    @classmethod
+    def build_clock(cls, mode: str, time_scale: float = 1.0) -> Clock:
+        """R19.1. The engine core asks for this; only the platform knows it is
+        simulated."""
+        from pvllm.sim.clock import build_clock
+
+        return build_clock(mode, time_scale=time_scale)  # type: ignore[arg-type]
+
+    @classmethod
+    def build_trace_sink(
+        cls,
+        path: str | None,
+        *,
+        seed: int,
+        clock_mode: str,
+        upstream_version: str,
+        config: dict[str, Any] | None = None,
+    ) -> TraceSink:
+        """R19.3."""
+        from pvllm.sim.trace import NullTraceWriter, TraceWriter
+
+        if path is None:
+            return NullTraceWriter()
+        return TraceWriter(
+            path,
+            seed=seed,
+            clock_mode=clock_mode,
+            upstream_version=upstream_version,
+            config=config,
+        )
 
 
 def sim_platform_plugin() -> str | None:

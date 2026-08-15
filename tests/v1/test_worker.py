@@ -8,7 +8,6 @@ import pytest
 from pvllm.engine.arg_utils import EngineArgs
 from pvllm.sampling_params import SamplingParams
 from pvllm.sim.clock import VirtualClock
-from pvllm.sim.rng import RngFactory
 from pvllm.v1.core.sched.scheduler import Scheduler
 from pvllm.v1.executor.abstract import Executor
 from pvllm.v1.kv_cache_interface import KVCacheConfig, KVCacheGroupSpec
@@ -32,10 +31,7 @@ class Engine:
         args.update(overrides)
         self.config = EngineArgs(**args).create_engine_config()
         self.clock = VirtualClock()
-        self.rng = RngFactory(self.config.sim_config.seed)
-        self.executor = Executor.get_class(self.config)(
-            self.config, self.clock, self.rng
-        )
+        self.executor = Executor.get_class(self.config)(self.config, self.clock)
 
         kv_bytes = self.executor.determine_available_memory()[0]
         specs = self.executor.get_kv_cache_specs()[0]

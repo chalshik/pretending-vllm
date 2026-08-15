@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
-from pvllm.sim.clock import Clock
 from pvllm.sim.cost_model import build_cost_model
 from pvllm.sim.device import SimDevice
 from pvllm.sim.hardware_db import load_device_card
@@ -30,6 +29,7 @@ from pvllm.sim.model import SimModel
 from pvllm.sim.model_db import load_model_card
 from pvllm.sim.rng import RngFactory
 from pvllm.sim.weights import StartupTimeline
+from pvllm.timebase import Clock
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from pvllm.v1.outputs import ModelRunnerOutput
@@ -48,7 +48,6 @@ class Worker:
         local_rank: int = 0,
         rank: int = 0,
         clock: Clock | None = None,
-        rng_factory: RngFactory | None = None,
     ) -> None:
         self.vllm_config = vllm_config
         self.model_config = vllm_config.model_config
@@ -66,7 +65,9 @@ class Worker:
                 "(requirement R19.1)"
             )
         self.clock = clock
-        self.rng_factory = rng_factory or RngFactory(self.sim_config.seed)
+        # Seeded here rather than passed down: B3 keeps randomness below the
+        # boundary, and the worker is the first object that is below it.
+        self.rng_factory = RngFactory(self.sim_config.seed)
 
         self.device: SimDevice | None = None
         self.model_runner: SimModelRunner | None = None

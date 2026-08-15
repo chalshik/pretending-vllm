@@ -107,13 +107,20 @@ class SimModel:
     def sample_token(self, request_id: str, position: int, max_tokens: int) -> int:
         """One token for one position.
 
-        Emits EOS at the planned length so the request stops through the *real*
-        stop-detection path (R11.5) rather than being cut off out of band. That
-        matters: the scheduler's finish accounting, the finish_reason, and the
-        metrics all key off the normal path.
+        When the policy stops a request *early*, EOS is emitted at the planned
+        length, so it stops through the real stop-detection path (R11.5) rather than
+        being cut off out of band -- the scheduler's finish accounting, the
+        finish_reason, and the metrics all key off that path.
+
+        When the plan runs to `max_tokens`, **no EOS is emitted** and the length cap
+        ends the request instead. That distinction is what makes `finish_reason`
+        meaningful: a product testing "was I truncated?" must be able to observe
+        `length`, and emitting EOS on the final allowed token would report `stop` for
+        every request under the default policy -- a wrong answer about the one field
+        a client uses to decide whether to continue.
         """
         planned = self.planned_output_length(request_id, max_tokens)
-        if position + 1 >= planned:
+        if planned < max_tokens and position + 1 >= planned:
             return EOS_TOKEN_ID
 
         rng = self.rng_factory.for_request(request_id)

@@ -43,7 +43,6 @@ class UniProcExecutor(Executor):
             local_rank=0,
             rank=0,
             clock=self.clock,
-            rng_factory=self.rng_factory,
         )
         self.driver_worker.init_device()
         self.driver_worker.load_model()

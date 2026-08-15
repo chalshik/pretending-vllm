@@ -22,10 +22,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from pvllm.logger import init_logger
-from pvllm.sim.clock import Clock
 from pvllm.sim.cost_model import CostModel, StepCost, StepProfile
 from pvllm.sim.hardware_db import DeviceCard
 from pvllm.sim.memory import MemoryLedger, MemoryProfile, SimOutOfMemoryError
+from pvllm.timebase import Clock
 
 logger = init_logger(__name__)
 

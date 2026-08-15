@@ -26,6 +26,9 @@ import platform
 from functools import cache
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from pvllm.timebase import Clock
+from pvllm.tracing import TraceSink
+
 if TYPE_CHECKING:
     from pvllm.config import VllmConfig
 
@@ -153,6 +156,31 @@ class Platform:
     @classmethod
     def get_device_communicator_cls(cls) -> str:
         """Fully-qualified name of the device communicator class."""
+        raise NotImplementedError
+
+    # --- runtime services --------------------------------------------------
+    #
+    # No upstream counterpart: upstream reads wall time and needs no seeded RNG.
+    # They are here because the engine core needs both (R19.1) and must not know a
+    # simulator exists (B1) -- so the platform supplies them, exactly as it supplies
+    # the worker class.
+
+    @classmethod
+    def build_clock(cls, mode: str, time_scale: float = 1.0) -> Clock:
+        """The engine's timebase."""
+        raise NotImplementedError
+
+    @classmethod
+    def build_trace_sink(
+        cls,
+        path: str | None,
+        *,
+        seed: int,
+        clock_mode: str,
+        upstream_version: str,
+        config: dict[str, Any] | None = None,
+    ) -> TraceSink:
+        """Where engine events are recorded (R19.3). `None` disables tracing."""
         raise NotImplementedError
 
     @classmethod

@@ -14,8 +14,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from pvllm.config import VllmConfig
-from pvllm.sim.clock import Clock
-from pvllm.sim.rng import RngFactory
+from pvllm.timebase import Clock
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from pvllm.v1.outputs import ModelRunnerOutput
@@ -24,15 +23,9 @@ from pvllm.v1.outputs import ModelRunnerOutput
 class Executor(ABC):
     """Runs the model across one or more workers."""
 
-    def __init__(
-        self,
-        vllm_config: VllmConfig,
-        clock: Clock,
-        rng_factory: RngFactory | None = None,
-    ) -> None:
+    def __init__(self, vllm_config: VllmConfig, clock: Clock) -> None:
         self.vllm_config = vllm_config
         self.clock = clock
-        self.rng_factory = rng_factory or RngFactory(vllm_config.sim_config.seed)
         self._init_executor()
 
     @staticmethod
