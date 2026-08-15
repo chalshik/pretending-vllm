@@ -10,12 +10,12 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: M1–M3 complete, M4 in progress.** The OpenAI server, the offline `LLM` class,
+> **Status: M1–M4 complete.** The OpenAI server, the offline `LLM` class,
 > `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, the debug surface (JSONL
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, and KV
-> disaggregation all work. **M4 is complete.** Mixed full/windowed models, data and expert
+> disaggregation all work. Mixed full/windowed models, data and expert
 > parallelism, and real KV transports are not implemented and refuse by name.
 
 ```bash
