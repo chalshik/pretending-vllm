@@ -10,8 +10,25 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: early.** M0 (foundations) is landing. The HTTP surface arrives in M1. Nothing here is
-> usable as a test double yet.
+> **Status: M1 complete.** The OpenAI server, the offline `LLM` class, `AsyncLLM`, and `/metrics`
+> all work. Prefix caching, chunked prefill, and preemption-under-load land in M2; tensor
+> parallelism, LoRA, and speculative decoding in M4. Run with `--no-enable-prefix-caching` until M2 —
+> the engine refuses to pretend a cache it does not have.
+
+```bash
+pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb \
+            --no-enable-prefix-caching
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
+client.chat.completions.create(
+    model="meta-llama/Llama-3.1-8B-Instruct",
+    messages=[{"role": "user", "content": "hello"}],
+    stream=True,
+)
+```
 
 ## What is real, and what is not
 
