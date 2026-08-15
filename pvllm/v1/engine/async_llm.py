@@ -141,6 +141,7 @@ class AsyncLLM:
         request_id: str,
         priority: int = 0,
         lora_request: Any = None,
+        mm_features: list[Any] | None = None,
     ) -> AsyncGenerator[RequestOutput, None]:
         """Yield outputs for one request until it finishes.
 
@@ -159,6 +160,7 @@ class AsyncLLM:
                 sampling_params,
                 priority=priority,
                 lora_request=lora_request,
+                mm_features=mm_features,
             )
             self.engine_core.add_request(engine_request)
             self.output_processor.add_request(

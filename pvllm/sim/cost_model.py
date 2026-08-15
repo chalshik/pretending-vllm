@@ -43,6 +43,12 @@ from pvllm.sim.model_db import DTYPE_BYTES, ModelCard
 #: two norms, three MLP matmuls, plus residuals.
 KERNELS_PER_LAYER_EAGER = 12
 #: With a captured graph the whole step is a handful of launches (R8.4).
+#: R18.1. Parameters a vision encoder reads per output embedding, as a multiple of
+#: hidden_size. A rough stand-in for a ViT's per-patch cost -- uncalibrated like every
+#: other constant here (R9.5), and the reason an image shows up as expensive rather
+#: than as exactly its real cost.
+ENCODER_PARAMS_PER_EMBED = 12
+
 KERNELS_PER_STEP_CAPTURED = 8
 
 
@@ -62,6 +68,10 @@ class StepProfile:
     seq_lens: list[int] = field(default_factory=list)
     #: R8.4: a captured graph shape and no chunked prefill means lower launch cost.
     is_graph_hit: bool = False
+    #: R18.1. Encoder embeddings computed this step. Zero for a text-only step, and
+    #: for a multimodal one whose images were already cached -- which is the point
+    #: of the encoder cache, and shows up here as a step that costs less.
+    num_encoder_embeds: int = 0
 
 
 @dataclass(frozen=True)
@@ -263,6 +273,23 @@ class RooflineCostModel(CostModel):
                 handoffs * tokens * self.model.hidden_size * self.dtype_bytes / link
             )
 
+        # --- encoder ---------------------------------------------------------
+        # R18.1. A vision encoder is a separate forward pass over the image patches,
+        # and it is compute-bound: a ViT over a few hundred patches does far more
+        # FLOPs per token than a decoder step does. Charged as its own term rather
+        # than folded into compute so `/debug/cost_model` can show a step that was
+        # slow because of an image rather than because of the batch.
+        t_encoder = 0.0
+        if profile.num_encoder_embeds:
+            encoder_flops = (
+                2.0
+                * ENCODER_PARAMS_PER_EMBED
+                * profile.num_encoder_embeds
+                * self.model.hidden_size
+            )
+            t_encoder = encoder_flops / (self.device.mfu * self.peak_flops)
+            flops += encoder_flops
+
         # --- launch overhead -------------------------------------------------
         graph_hit = profile.is_graph_hit and not self.enforce_eager
         num_kernels = (
@@ -272,7 +299,7 @@ class RooflineCostModel(CostModel):
         )
         t_overhead = num_kernels * self.device.launch_overhead
 
-        duration = max(t_compute, t_memory) + t_comm + t_overhead
+        duration = max(t_compute, t_memory) + t_comm + t_overhead + t_encoder
 
         # Seeded, so a run with jitter is still reproducible (R19.2). Clamped at zero
         # because a large sigma could otherwise draw a negative multiplier and run
@@ -284,7 +311,7 @@ class RooflineCostModel(CostModel):
 
         return StepCost(
             duration=duration,
-            compute_seconds=t_compute,
+            compute_seconds=t_compute + t_encoder,
             memory_seconds=t_memory,
             comm_seconds=t_comm,
             overhead_seconds=t_overhead,

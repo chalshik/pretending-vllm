@@ -45,6 +45,7 @@ class InputProcessor:
         priority: int = 0,
         cache_salt: str | None = None,
         lora_request: Any = None,
+        mm_features: list[Any] | None = None,
     ) -> EngineCoreRequest:
         """Build the wire request. R3.1.
 
@@ -74,6 +75,7 @@ class InputProcessor:
             cache_salt=cache_salt,
             priority=priority,
             lora_request=lora_request,
+            mm_features=list(mm_features or ()),
         )
 
     def _validate_params(self, sampling_params: SamplingParams) -> None:

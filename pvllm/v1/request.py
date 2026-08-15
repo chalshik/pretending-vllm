@@ -101,6 +101,7 @@ class Request:
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[[Request], list[BlockHash]] | None = None,
+        mm_features: list[Any] | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -131,7 +132,7 @@ class Request:
         self.num_computed_tokens = 0
         self.spec_token_ids: list[int] = []
         self.cache_salt = cache_salt
-        self.mm_features: list[Any] = []
+        self.mm_features: list[Any] = list(mm_features or ())
 
         # R15. `None` when unconstrained, which is what `use_structured_output`
         # tests -- so the whole grammar path costs one attribute check on the
@@ -196,6 +197,7 @@ class Request:
             priority=request.priority,
             trace_headers=request.trace_headers,
             block_hasher=block_hasher,
+            mm_features=request.mm_features,
         )
 
     def append_output_token_ids(self, token_ids: int | list[int]) -> None:

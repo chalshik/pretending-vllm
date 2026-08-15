@@ -325,7 +325,9 @@ def free_block_ids(blocks: Iterable[KVCacheBlock]) -> list[int]:
 # --- hashing (R6.3, C3) ----------------------------------------------------
 
 
-def generate_block_hash_extra_keys(request: Request) -> tuple[Any, ...] | None:
+def generate_block_hash_extra_keys(
+    request: Request, start_token_idx: int = 0, end_token_idx: int | None = None
+) -> tuple[Any, ...] | None:
     """Everything beyond token ids that must distinguish one block from another.
 
     Two requests with identical tokens must *not* share blocks when anything else
@@ -343,10 +345,20 @@ def generate_block_hash_extra_keys(request: Request) -> tuple[Any, ...] | None:
         # two requests referring to one adapter by different names must still share
         # its cached prefixes.
         keys.append(request.lora_request.lora_int_id)
+    # R18. Only the images this *block* overlaps, which is what upstream does and
+    # matters more than it looks. Folding every one of a request's images into every
+    # block's key would partition the text *before* the first image too -- so two
+    # prompts sharing a long system prompt and differing only in a later image would
+    # share nothing, and the reported hit rate would be far below a real
+    # deployment's. C3 calls hit rate exact, so over-partitioning is as wrong as
+    # under-partitioning; it is just wrong in the safe direction.
     if request.mm_features:
-        raise NotImplementedError(
-            "multimodal content hashes must join the prefix cache extra keys "
-            "(requirement R6.3); multimodal lands in M4"
+        end = end_token_idx if end_token_idx is not None else request.num_tokens
+        keys.extend(
+            feature.identifier
+            for feature in request.mm_features
+            if feature.position < end
+            and feature.position + feature.length > start_token_idx
         )
     return tuple(keys) if keys else None
 
@@ -389,12 +401,16 @@ def get_request_block_hasher(
     def request_block_hasher(request: Request) -> list[BlockHash]:
         start = len(request.block_hashes) * block_size
         num_tokens = request.num_tokens
-        extra_keys = generate_block_hash_extra_keys(request)
         parent_hash = request.block_hashes[-1] if request.block_hashes else None
 
         new_hashes: list[BlockHash] = []
         while start + block_size <= num_tokens:
             block_tokens = request.all_token_ids[start : start + block_size]
+            # Per block, because the multimodal keys depend on which images this
+            # block's token span touches (R18).
+            extra_keys = generate_block_hash_extra_keys(
+                request, start, start + block_size
+            )
             block_hash = hash_block_tokens(
                 hash_fn, parent_hash, block_tokens, none_hash, extra_keys
             )

@@ -150,6 +150,10 @@ class SimModelRunner:
             # exactly as it does upstream -- no extra channel, and nothing above the
             # boundary needs to know what the simulated model does with it.
             self._maybe_set_constraint(new_req.req_id, new_req.sampling_params)
+            # R18.1. Kept so the cost model can price this step's encoder work; the
+            # scheduler sends input *ids*, and their sizes live on the request.
+            if new_req.mm_features:
+                self.req_states.mm_features[new_req.req_id] = list(new_req.mm_features)
 
     def _maybe_set_constraint(self, req_id: str, sampling_params: Any) -> None:
         """Hand a constrained request's grammar to the model. R15."""
@@ -373,12 +377,25 @@ class SimModelRunner:
             and attn_metadata.num_prefills == 0
         )
 
+        # R18.1. What the scheduler told us to encode this step. Cached images are
+        # absent from `scheduled_encoder_inputs` by construction, so a step that hit
+        # the cache costs nothing extra -- which is the effect worth seeing.
+        num_encoder_embeds = 0
+        for req_id, input_ids in scheduler_output.scheduled_encoder_inputs.items():
+            features = self.req_states.mm_features.get(req_id, ())
+            num_encoder_embeds += sum(
+                features[input_id].num_embeds
+                for input_id in input_ids
+                if input_id < len(features)
+            )
+
         return input_batch, StepProfile(
             num_tokens=input_batch.num_tokens,
             num_reqs=input_batch.num_reqs,
             query_lens=input_batch.num_scheduled_tokens.tolist(),
             seq_lens=input_batch.seq_lens_np.tolist(),
             is_graph_hit=graph_hit,
+            num_encoder_embeds=num_encoder_embeds,
         )
 
     def _finish_step(

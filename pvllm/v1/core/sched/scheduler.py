@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
+from pvllm.v1.core.encoder_cache_manager import EncoderCacheManager
 from pvllm.v1.core.kv_cache_manager import KVCacheManager
 from pvllm.v1.core.sched.output import (
     CachedRequestData,
@@ -150,6 +151,15 @@ class Scheduler:
         #: Requests whose grammar failed to compile, for the core to finish with an
         #: error. Held rather than raised: a bad schema fails its own request.
         self.grammar_compile_error_reqs: set[str] = set()
+        # R18.1. The encoder output cache, and this step's encoder budget. Sized
+        # from the token budget (see SchedulerConfig): an image whose embeddings
+        # cannot fit one step could never be scheduled at all.
+        self.encoder_cache_manager = EncoderCacheManager(
+            self.scheduler_config.encoder_cache_size
+        )
+        self.max_num_encoder_input_tokens = (
+            self.scheduler_config.max_num_encoder_input_tokens
+        )
         #: R14. Rejected drafts from the last step, per request, for the metrics.
         self.last_num_invalid_spec_tokens: dict[str, int] = {}
         #: R14. Cumulative draft counters, for `vllm:spec_decode_*`.
@@ -208,6 +218,10 @@ class Scheduler:
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
+        # R18.1. Phase 2's state: which encoder inputs run this step, and what is
+        # left of the separate budget they draw on.
+        scheduled_encoder_inputs: dict[str, list[int]] = {}
+        encoder_budget = self.max_num_encoder_input_tokens
         token_budget = self.max_num_scheduled_tokens
         # Read once: both the running loop and the admission loop cap a request's
         # share of the step by it (R5.4).
@@ -248,6 +262,22 @@ class Scheduler:
                 # relaxes strict FCFS here.
                 req_index += 1
                 continue
+
+            # --- phase 2: encoder inputs -------------------------------------
+            #
+            # R18.1. Against a *separate* budget, because encoder work and decoder
+            # work do not trade against each other: an image costs vision-encoder
+            # time whatever the token budget is doing. A request whose images will
+            # not fit this step has its token count trimmed to stop before the
+            # first one, so it makes progress on the text instead of stalling.
+            num_new_tokens, encoder_inputs, encoder_budget = self._schedule_encoder(
+                request, num_new_tokens, encoder_budget
+            )
+            if num_new_tokens <= 0:
+                req_index += 1
+                continue
+            if encoder_inputs:
+                scheduled_encoder_inputs[request.request_id] = encoder_inputs
 
             # Allocate, preempting from the tail until it fits (R5.5).
             new_blocks = None
@@ -414,6 +444,19 @@ class Scheduler:
                     # of the queue so it is tried first.
                     break
 
+                # R18.1. Same encoder budget, same trimming rule, before the
+                # request is committed to the batch.
+                num_new_tokens, encoder_inputs, encoder_budget = self._schedule_encoder(
+                    request, num_new_tokens, encoder_budget
+                )
+                if num_new_tokens <= 0:
+                    self.waiting.pop_request()
+                    self.skipped_waiting.add_request(request)
+                    self.kv_cache_manager.free(request)
+                    continue
+                if encoder_inputs:
+                    scheduled_encoder_inputs[request.request_id] = encoder_inputs
+
                 request = self.waiting.pop_request()
                 self.running.append(request)
                 # Collected rather than stamped: the scheduler has no clock (R19.1),
@@ -503,12 +546,12 @@ class Scheduler:
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
-            scheduled_encoder_inputs={},
+            scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
             has_structured_output_requests=bool(structured_output_request_ids),
             structured_output_request_ids=structured_output_request_ids,
             finished_req_ids=self.finished_req_ids,
-            free_encoder_mm_hashes=[],
+            free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
             preempted_req_ids={r.request_id for r in preempted_reqs} or None,
         )
 
@@ -741,6 +784,10 @@ class Scheduler:
             self._free_request(request)
 
     def _free_request(self, request: Request) -> None:
+        # R18.1. Dropped, not evicted: the embeddings stay resident so the next
+        # request with the same image still hits.
+        if request.mm_features:
+            self.encoder_cache_manager.free(request)
         assert request.is_finished(), (
             f"request {request.request_id} freed while still {request.status}"
         )
@@ -794,6 +841,56 @@ class Scheduler:
         """Hand the last step's record to the engine core for stamping."""
         record, self.pending_step_record = self.pending_step_record, None
         return record
+
+    def _schedule_encoder(
+        self, request: Request, num_new_tokens: int, encoder_budget: int
+    ) -> tuple[int, list[int], int]:
+        """Decide which of a request's images run this step. R18.1.
+
+        Returns `(num_new_tokens, input_ids, encoder_budget)`. `num_new_tokens` may
+        come back *smaller*: if an image cannot be encoded this step, the request is
+        trimmed to stop just before its first placeholder rather than being blocked
+        entirely. Scheduling past a placeholder whose embeddings do not exist would
+        mean attending to KV that was never written.
+
+        A no-op for a text request, which is what keeps the whole encoder path off
+        the hot loop for the overwhelmingly common case.
+        """
+        if not request.mm_features:
+            return num_new_tokens, [], encoder_budget
+
+        scheduled: list[int] = []
+        start = request.num_computed_tokens
+        end = start + num_new_tokens
+
+        for input_id, feature in enumerate(request.mm_features):
+            # Only items this step's token span actually touches.
+            if feature.position >= end or feature.position + feature.length <= start:
+                continue
+            if input_id in self.encoder_cache_manager.get_cached_input_ids(request):
+                continue
+
+            hit = self.encoder_cache_manager.has_cache(request, input_id)
+            self.encoder_cache_manager.record_lookup(hit)
+            if hit:
+                # Already resident from another request, or from this one's earlier
+                # chunk. Take a reference; no encoder work and no budget.
+                self.encoder_cache_manager.allocate(request, input_id)
+                continue
+
+            if feature.num_embeds > encoder_budget or not (
+                self.encoder_cache_manager.can_allocate(request, input_id)
+            ):
+                # Trim to stop before this image. `max(0, ...)` because the
+                # placeholder may start exactly at the request's current position,
+                # in which case there is nothing to do this step at all.
+                return max(0, feature.position - start), scheduled, encoder_budget
+
+            self.encoder_cache_manager.allocate(request, input_id)
+            encoder_budget -= feature.num_embeds
+            scheduled.append(input_id)
+
+        return num_new_tokens, scheduled, encoder_budget
 
     def _promote_grammar_request(self, request: Request) -> bool:
         """Whether a grammar-blocked request is ready to be admitted. R15.

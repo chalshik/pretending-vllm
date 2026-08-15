@@ -11,6 +11,7 @@ subsequent chunks carry content and no role.
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -53,13 +54,29 @@ class OpenAIServingChat:
     def _created(self) -> int:
         return int(self.engine.engine_core.clock_time)
 
-    def _render(self, request: ChatCompletionRequest) -> str:
+    def _render(
+        self, request: ChatCompletionRequest
+    ) -> tuple[str | list[int], list[Any]]:
+        """The prompt, and any multimodal placeholders in it. R18.
+
+        Text-only requests still come back as a *string* and take exactly the path
+        they did before multimodal existed. A request with an image comes back as
+        token ids, because a placeholder is a token id and there is no text that
+        tokenizes to one.
+        """
+        from pvllm.entrypoints.openai.multimodal import build_multimodal_prompt
+
+        token_ids, features = build_multimodal_prompt(
+            request.messages, self.engine.tokenizer
+        )
+        if token_ids is not None:
+            return token_ids, features
         return str(
             self.engine.tokenizer.apply_chat_template(
                 request.messages,
                 add_generation_prompt=request.add_generation_prompt,
             )
-        )
+        ), []
 
     async def create_chat_completion(
         self, request: ChatCompletionRequest, raw_request: Request | None = None
@@ -80,31 +97,36 @@ class OpenAIServingChat:
 
         request_id = self._next_request_id()
         try:
-            prompt = self._render(request)
+            prompt, mm_features = self._render(request)
             sampling_params = request.to_sampling_params(streaming=request.stream)
         except ValueError as exc:
             return create_error_response(str(exc))
 
         if request.stream:
             return self._stream(
-                request, request_id, prompt, sampling_params, raw_request
+                request, request_id, prompt, sampling_params, raw_request, mm_features
             )
         return await self._complete(
-            request, request_id, prompt, sampling_params, raw_request
+            request, request_id, prompt, sampling_params, raw_request, mm_features
         )
 
     async def _complete(
         self,
         request: ChatCompletionRequest,
         request_id: str,
-        prompt: str,
+        prompt: str | list[int],
         sampling_params: SamplingParams,
         raw_request: Request | None,
+        mm_features: list[Any] | None = None,
     ) -> ChatCompletionResponse | JSONResponse:
         final: RequestOutput | None = None
         try:
             async for output in self.engine.generate(
-                prompt, sampling_params, request_id, priority=request.priority
+                prompt,
+                sampling_params,
+                request_id,
+                priority=request.priority,
+                mm_features=mm_features,
             ):
                 final = output
                 if raw_request is not None and await raw_request.is_disconnected():
@@ -143,9 +165,10 @@ class OpenAIServingChat:
         self,
         request: ChatCompletionRequest,
         request_id: str,
-        prompt: str,
+        prompt: str | list[int],
         sampling_params: SamplingParams,
         raw_request: Request | None,
+        mm_features: list[Any] | None = None,
     ) -> AsyncGenerator[str, None]:
         created = self._created()
         model = request.model
@@ -168,7 +191,11 @@ class OpenAIServingChat:
 
         try:
             async for output in self.engine.generate(
-                prompt, sampling_params, request_id, priority=request.priority
+                prompt,
+                sampling_params,
+                request_id,
+                priority=request.priority,
+                mm_features=mm_features,
             ):
                 num_prompt_tokens = len(output.prompt_token_ids or ())
                 completion = output.outputs[0]

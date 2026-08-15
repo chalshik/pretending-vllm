@@ -28,6 +28,7 @@ import msgspec
 # checker makes `Decoder(EngineCoreRequest)` raise `NameError` -- which the
 # in-process client never triggers, because it never decodes anything. The
 # multiprocess client does, on every request.
+from pvllm.multimodal.inputs import MultiModalFeatureSpec
 from pvllm.sampling_params import SamplingParams
 
 FINISH_REASON_STRINGS = ("stop", "length", "abort", "error", "repetition")
@@ -94,6 +95,9 @@ class EngineCoreRequest(
     priority: int = 0
     trace_headers: Mapping[str, str] | None = None
     data_parallel_rank: int | None = None
+    #: R18. Multimodal placeholders. Encoded as plain structs so they survive the
+    #: msgpack round trip to a multiprocess core, like everything else here.
+    mm_features: list[MultiModalFeatureSpec] = []
 
 
 class EngineCoreOutput(

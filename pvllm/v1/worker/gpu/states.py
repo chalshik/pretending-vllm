@@ -18,6 +18,8 @@ simulate a device that does.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 
@@ -55,6 +57,10 @@ class RequestState:
         self.num_computed_prefill_tokens = np.zeros(max_num_reqs, dtype=np.int32)
         self.max_seq_len = np.zeros(max_num_reqs, dtype=np.int32)
         self.num_output_tokens = np.zeros(max_num_reqs, dtype=np.int32)
+        #: R18.1. request_id -> its multimodal items, for the encoder cost. Keyed by
+        #: id rather than slot because it is read by request id from the scheduler
+        #: output, which does not know slot indices.
+        self.mm_features: dict[str, list[Any]] = {}
 
         # Allocated per slot on demand rather than as one dense 2D array: at
         # max_num_reqs=1024 and max_model_len=128k that array is 512 MiB of int32,
