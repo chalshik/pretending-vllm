@@ -10,11 +10,12 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: M1–M3 complete.** The OpenAI server, the offline `LLM` class, `AsyncLLM`, `/metrics`,
-> prefix caching, chunked prefill, preemption, the debug surface (JSONL trace, timeline viewer,
-> `/debug/*` endpoints), the conformance suite, `pvllm bench`, the multiprocess engine core, and
-> real/scaled clocks all work. Tensor parallelism, LoRA, speculative decoding, structured output,
-> and multimodal come in M4.
+> **Status: M1–M3 complete, M4 in progress.** The OpenAI server, the offline `LLM` class,
+> `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, the debug surface (JSONL
+> trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
+> multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
+> parallelism, speculative decoding, and sliding-window attention all work. Multimodal, KV
+> connectors, and mixed full/windowed models are not implemented and refuse by name.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -147,6 +148,25 @@ depends on OS scheduling rather than only on the workload — which costs the by
 determinism the conformance suite and the sweep runner both rely on. Upstream defaults it on because
 there it buys overlap with the GPU; here it buys realism at the cost of reproducibility, so turning
 it on is a deliberate act.
+
+## Modeling a deployment's shape
+
+Each of these changes a number a capacity plan turns on, and each is modeled where it is
+observable rather than approximated.
+
+| | what it changes |
+|---|---|
+| `--tensor-parallel-size` | shards KV and weights per device; near-linear speedup on prefill, sublinear on decode |
+| `--pipeline-parallel-size` | shards layers per device; **same step latency**, less memory (no microbatch overlap is modeled) |
+| `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |
+| `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
+| speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
+| `--enable-lora` + prefix caching | adapter id partitions the cache, so two tenants with the same prompt do not share blocks |
+
+Two of these carry a knob a simulator cannot derive from anything, because it depends on a model
+this engine does not have: `--spec-acceptance-rate` (the agreement between a draft model and its
+target) and the structured-output backend's conformance. Measure them on your real pair and
+everything downstream is faithful.
 
 ## Comparing configurations
 
