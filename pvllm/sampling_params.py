@@ -65,6 +65,12 @@ class SamplingParams:
     #: stop-string checker does not re-normalize on every step.
     all_stop_token_ids: set[int] = field(default_factory=set, init=False)
 
+    #: Set by the processor from the tokenizer, and left `None` when `ignore_eos`
+    #: is set. That is how upstream implements `ignore_eos`: rather than testing the
+    #: flag at every stop check, the policy is decided once here, so `check_stop`
+    #: has one condition instead of two that could disagree.
+    eos_token_id: int | None = field(default=None, init=False)
+
     def __post_init__(self) -> None:
         if isinstance(self.stop, str):
             self.stop = [self.stop]
@@ -135,6 +141,18 @@ class SamplingParams:
                 "stop strings are only supported when detokenize is True. Set "
                 "detokenize=True to use stop."
             )
+
+    def update_from_tokenizer(self, eos_token_id: int | None) -> None:
+        """Bind the tokenizer's EOS. Called by the processor.
+
+        Honours `ignore_eos` by simply not recording the token, matching upstream.
+        The id still joins `all_stop_token_ids`, because `min_tokens` suppression
+        needs to know which tokens *would* have stopped the request.
+        """
+        if not self.ignore_eos:
+            self.eos_token_id = eos_token_id
+        if eos_token_id is not None:
+            self.all_stop_token_ids.add(eos_token_id)
 
     @property
     def all_stop_strings(self) -> list[str]:

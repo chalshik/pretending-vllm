@@ -92,6 +92,9 @@ class ModuleRecord:
     upstream: str | None
     tier: str | None
     error: str | None = None
+    #: Declared `(none -- pvllm addition)`: no upstream counterpart, but not
+    #: simulator internals either.
+    is_addition: bool = False
 
 
 def find_upstream_dir() -> Path | None:
@@ -123,11 +126,12 @@ def parse_module(path: Path) -> ModuleRecord:
 
     raw = upstream_match.group(1)
     tier = tier_match.group(1)
+    is_addition = "pvllm addition" in raw
     upstream = _NOTE_RE.sub("", raw).strip()
     if upstream.startswith("(") or upstream.lower().startswith("none"):
         upstream = ""
 
-    return ModuleRecord(rel, upstream or None, tier)
+    return ModuleRecord(rel, upstream or None, tier, is_addition=is_addition)
 
 
 def check(upstream_dir: Path, records: list[ModuleRecord]) -> list[str]:
@@ -140,11 +144,17 @@ def check(upstream_dir: Path, records: list[ModuleRecord]) -> list[str]:
             problems.append(f"{record.module}: invalid tier {record.tier!r}")
 
         if record.upstream is None:
-            # Tier D is the only tier allowed to have no counterpart.
-            if record.tier and record.tier != "D":
+            # A module with no counterpart must say why. Tier D (the simulator) is
+            # the common case; a pvllm-only interface that sits *above* the boundary
+            # -- the trace sink, for instance -- is neither a port nor simulator
+            # internals, so it declares itself explicitly instead of being mistiered
+            # into D just to satisfy this check.
+            if record.tier and record.tier != "D" and not record.is_addition:
                 problems.append(
                     f"{record.module}: tier {record.tier} declares no upstream "
-                    f"counterpart; only Tier D (invented) may."
+                    f"counterpart. Either give it one, retier it to D (simulator "
+                    f"internals), or mark it `Upstream: (none -- pvllm addition)` if "
+                    f"it is a pvllm-only interface above the boundary."
                 )
             continue
 

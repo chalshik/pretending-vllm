@@ -58,6 +58,12 @@ the requirements: upstream drift becomes a failing CI check instead of a discove
 | **C** | Shape-only | Field names, types, and validation *intent* match. Implementation is ours. |
 | **D** | Invented | No upstream counterpart. The only place allowed randomness, wall-clock, or invented numbers (B3). |
 
+A module with **no upstream counterpart** declares `Upstream: (none -- simulator)` and Tier D, or
+`Upstream: (none -- pvllm addition)` at whatever tier fits. The second form exists for pvllm-only
+*interfaces* that sit above the simulation boundary — the trace sink protocol, for instance. Those
+are neither ports nor simulator internals, and mistiering them into D just to satisfy `spec_sync`
+would wrongly mark them as places allowed to invent numbers.
+
 **Unsupported-path discipline:** a dropped upstream code path raises `NotImplementedError` naming the
 upstream feature. It never silently no-ops. For a test double, failing loudly beats behaving subtly
 wrongly.

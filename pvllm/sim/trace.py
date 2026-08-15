@@ -29,9 +29,11 @@ import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import TracebackType
-from typing import Any, BinaryIO, Protocol
+from typing import Any, BinaryIO
 
 import msgspec
+
+from pvllm.tracing import TraceSink as TraceSink  # re-exported for convenience
 
 #: Bump when a field's meaning changes or a field is removed. Adding a field is
 #: backward compatible and does not require a bump; readers must ignore unknown keys.
@@ -39,13 +41,6 @@ TRACE_SCHEMA_VERSION = 1
 
 _encoder = msgspec.json.Encoder()
 _decoder = msgspec.json.Decoder()
-
-
-class TraceSink(Protocol):
-    """Anything a trace can be written to."""
-
-    def emit(self, event_type: str, t: float | None = None, **fields: Any) -> None: ...
-    def close(self) -> None: ...
 
 
 class NullTraceWriter:
