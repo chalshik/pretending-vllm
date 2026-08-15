@@ -17,36 +17,93 @@ Hashing (R6.3) lands in M2 with prefix caching. The types and the seam exist now
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import hashlib
+import pickle
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, Any, NewType
+
+if TYPE_CHECKING:
+    from pvllm.v1.request import Request
 
 
-class BlockHash(NamedTuple):
-    """The hash of a full block's contents, plus the tokens that produced it.
+#: The hash of a full block's contents, including every block before it.
+#:
+#: `NewType` over `bytes`, matching upstream: a digest rather than a structure, so
+#: two blocks with identical content and identical history hash identically no matter
+#: which request produced them -- which is the entire mechanism of prefix caching.
+BlockHash = NewType("BlockHash", bytes)
 
-    A NamedTuple rather than a bare int so a hash can never be confused with a block
-    id -- both are ints, both flow through the KV manager, and mixing them would
-    produce a cache that silently returns the wrong blocks.
+#: A block hash scoped to one KV cache group (R6.7).
+#:
+#: Two groups with different block sizes can produce the same digest for different
+#: content, so the group id is appended to the key.
+BlockHashWithGroupId = NewType("BlockHashWithGroupId", bytes)
 
-    Carrying the token ids alongside the digest lets the pool verify a match rather
-    than trust it, which makes a hash collision a detectable event instead of silent
-    data corruption. Upstream does the same.
+
+def make_block_hash_with_group_id(
+    block_hash: BlockHash, group_id: int
+) -> BlockHashWithGroupId:
+    return BlockHashWithGroupId(block_hash + group_id.to_bytes(4, "big", signed=False))
+
+
+def sha256_hash(value: Any) -> bytes:
+    """SHA-256 of a pickled object. Upstream's default at the pin."""
+    return hashlib.sha256(
+        pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    ).digest()
+
+
+def builtin_hash(value: Any) -> bytes:
+    """Python's builtin `hash`, as 8 bytes.
+
+    Faster and far more collision-prone than SHA-256. Upstream offers it as an
+    option; it is only safe because a hit is verified by the block still being
+    resident, not by the digest alone.
+
+    `hash()` is salted per process by `PYTHONHASHSEED`, so this is *not* reproducible
+    across runs unless that variable is set. `sha256` is the default here for that
+    reason.
     """
-
-    hash_value: int
-    token_ids: tuple[int, ...]
+    return hash(value).to_bytes(8, "big", signed=True)
 
 
-class BlockHashWithGroupId(NamedTuple):
-    """A block hash scoped to one KV cache group.
+_HASH_FUNCTIONS: dict[str, Callable[[Any], bytes]] = {
+    "sha256": sha256_hash,
+    "builtin": builtin_hash,
+}
 
-    Two groups with different block sizes can produce the same digest for different
-    content, so the group id is part of the cache key (R6.7).
+
+def get_hash_fn_by_name(name: str) -> Callable[[Any], bytes]:
+    try:
+        return _HASH_FUNCTIONS[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown prefix_caching_hash_algo {name!r}; expected one of "
+            f"{sorted(_HASH_FUNCTIONS)}"
+        ) from None
+
+
+def compute_none_hash(hash_fn: Callable[[Any], bytes], seed: int) -> BlockHash:
+    """The sentinel standing in for "no parent block".
+
+    **A deliberate divergence from upstream, and the one caveat on C3.** Upstream
+    uses `os.urandom(32)` unless `PYTHONHASHSEED` is set, so that cache keys are not
+    predictable across processes. That would make block hashes differ on every run
+    here, which breaks B4 (identical output from the same seed) and makes a recorded
+    conformance trace incomparable to the next one.
+
+    So this derives the sentinel from the run seed instead: deterministic by
+    construction, and still distinct per seed.
+
+    The consequence for C3 is worth stating precisely. Hit *rates* and block
+    allocation order are reproducible either way and can be compared to a real vLLM
+    run directly. Hash *values* can only be compared if that run had `PYTHONHASHSEED`
+    set and the same value fed this derivation -- upstream's own warning says as
+    much. Until golden traces exist this is theoretical, but it is a real limit on
+    what C3 can check, not a detail.
     """
-
-    block_hash: BlockHash
-    group_id: int
+    return BlockHash(hash_fn(("pvllm-none-hash", seed)))
 
 
 @dataclass
@@ -260,24 +317,90 @@ class FreeKVCacheBlockQueue:
         return blocks
 
 
-def get_request_block_hasher(
-    block_size: int, hash_algo: str
-) -> None:  # pragma: no cover - M2
-    """Build the per-request block hasher injected into `Request` (F8, R6.3).
-
-    Lands in M2 with prefix caching. Named here so the seam is visible: `Request`
-    already accepts the callable this will return.
-    """
-    raise NotImplementedError(
-        "block hashing (requirement R6.3) lands in M2 with prefix caching"
-    )
-
-
-def need_extra_keys(request: object) -> bool:  # pragma: no cover - M2
-    """Whether a request contributes extra keys (LoRA id, mm hash, cache salt)."""
-    raise NotImplementedError("prefix cache extra keys (requirement R6.3) land in M2")
-
-
 def free_block_ids(blocks: Iterable[KVCacheBlock]) -> list[int]:
     """Block ids, for tracing and assertions."""
     return [block.block_id for block in blocks]
+
+
+# --- hashing (R6.3, C3) ----------------------------------------------------
+
+
+def generate_block_hash_extra_keys(request: Request) -> tuple[Any, ...] | None:
+    """Everything beyond token ids that must distinguish one block from another.
+
+    Two requests with identical tokens must *not* share blocks when anything else
+    about them differs: a different LoRA adapter produces different KV for the same
+    tokens, and `cache_salt` exists precisely so a caller can partition the cache
+    between tenants. Omitting a key here is a cache-poisoning bug -- one request
+    silently reading another's KV -- which is why the unimplemented cases raise
+    rather than being skipped.
+    """
+    keys: list[Any] = []
+    if request.cache_salt is not None:
+        keys.append(request.cache_salt)
+    if request.lora_request is not None:
+        raise NotImplementedError(
+            "a LoRA adapter id must join the prefix cache extra keys "
+            "(requirement R6.3); LoRA lands in M4"
+        )
+    if request.mm_features:
+        raise NotImplementedError(
+            "multimodal content hashes must join the prefix cache extra keys "
+            "(requirement R6.3); multimodal lands in M4"
+        )
+    return tuple(keys) if keys else None
+
+
+def hash_block_tokens(
+    hash_fn: Callable[[Any], bytes],
+    parent_block_hash: BlockHash | None,
+    curr_block_token_ids: Sequence[int],
+    none_hash: BlockHash,
+    extra_keys: tuple[Any, ...] | None = None,
+) -> BlockHash:
+    """Hash one full block, chained to every block before it. R6.3, C3.
+
+    The chain through `parent_block_hash` is what makes this a *prefix* cache rather
+    than a block cache: block 3 of one sequence matches block 3 of another only if
+    blocks 0 through 2 matched too. Hash a block's tokens alone and two requests
+    sharing a middle passage but not a beginning would wrongly collide -- and the
+    second would read KV computed under a different preceding context.
+    """
+    if not parent_block_hash:
+        parent_block_hash = none_hash
+    return BlockHash(
+        hash_fn((parent_block_hash, tuple(curr_block_token_ids), extra_keys))
+    )
+
+
+def get_request_block_hasher(
+    block_size: int,
+    hash_fn: Callable[[Any], bytes],
+    none_hash: BlockHash,
+) -> Callable[[Request], list[BlockHash]]:
+    """Build the per-request hasher injected into `Request` (F8).
+
+    Returns hashes for blocks that became *full* since the last call. A partial tail
+    is never hashed: a later token would change its contents, so caching it would
+    publish a block whose identity is about to change underneath any request that
+    matched it.
+    """
+
+    def request_block_hasher(request: Request) -> list[BlockHash]:
+        start = len(request.block_hashes) * block_size
+        num_tokens = request.num_tokens
+        extra_keys = generate_block_hash_extra_keys(request)
+        parent_hash = request.block_hashes[-1] if request.block_hashes else None
+
+        new_hashes: list[BlockHash] = []
+        while start + block_size <= num_tokens:
+            block_tokens = request.all_token_ids[start : start + block_size]
+            block_hash = hash_block_tokens(
+                hash_fn, parent_hash, block_tokens, none_hash, extra_keys
+            )
+            new_hashes.append(block_hash)
+            parent_hash = block_hash
+            start += block_size
+        return new_hashes
+
+    return request_block_hasher

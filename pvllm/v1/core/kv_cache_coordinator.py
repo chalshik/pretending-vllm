@@ -66,6 +66,15 @@ class KVCacheCoordinator:
             manager.get_blocks(request_id) for manager in self.single_type_managers
         )
 
+    def adopt_cached_blocks(
+        self, request_id: str, blocks: tuple[list[KVCacheBlock], ...]
+    ) -> None:
+        """Install prefix-cache hits in every group. R6.5."""
+        for manager, group_blocks in zip(
+            self.single_type_managers, blocks, strict=True
+        ):
+            manager.adopt_cached_blocks(request_id, group_blocks)
+
     def pop_blocks_for_free(self, request_id: str) -> list[KVCacheBlock]:
         """Every group's blocks for a request, without returning them to the pool."""
         blocks: list[KVCacheBlock] = []

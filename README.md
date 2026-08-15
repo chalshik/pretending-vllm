@@ -10,18 +10,17 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: M1 complete.** The OpenAI server, the offline `LLM` class, `AsyncLLM`, and `/metrics`
-> all work. Prefix caching, chunked prefill, and preemption-under-load land in M2; tensor
-> parallelism, LoRA, and speculative decoding in M4. Run with `--no-enable-prefix-caching` until M2 —
-> the engine refuses to pretend a cache it does not have.
+> **Status: M1 complete, M2 in progress.** The OpenAI server, the offline `LLM` class, `AsyncLLM`,
+> `/metrics`, and prefix caching all work. Chunked prefill and per-request latency metrics are
+> landing; tensor parallelism, LoRA, and speculative decoding come in M4.
 
 ```bash
-pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb \
-            --no-enable-prefix-caching
+pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
 ```
 
 ```python
 from openai import OpenAI
+
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
 client.chat.completions.create(
     model="meta-llama/Llama-3.1-8B-Instruct",

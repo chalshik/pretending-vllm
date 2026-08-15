@@ -52,6 +52,21 @@ class SingleTypeKVCacheManager(ABC):
     def get_blocks(self, request_id: str) -> list[KVCacheBlock]:
         return self.req_to_blocks.get(request_id, [])
 
+    def adopt_cached_blocks(self, request_id: str, blocks: list[KVCacheBlock]) -> None:
+        """Install prefix-cache hits at the head of a request's block table. R6.5.
+
+        At the head, and only when the request holds nothing yet: a cache hit is by
+        definition a *prefix*, so appending it after existing blocks would place the
+        shared beginning of a sequence after its own middle.
+        """
+        held = self.req_to_blocks[request_id]
+        if held:
+            raise AssertionError(
+                f"request {request_id} already holds {len(held)} blocks; cached "
+                f"prefix blocks must be adopted before any are allocated"
+            )
+        held.extend(blocks)
+
     def pop_blocks_for_free(self, request_id: str) -> list[KVCacheBlock]:
         """Remove the request's bookkeeping and hand back its blocks.
 

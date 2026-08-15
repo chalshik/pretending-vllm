@@ -192,11 +192,20 @@ class Request:
             self._all_token_ids.extend(token_ids)
         self.update_block_hashes()
 
-    def update_block_hashes(self) -> None:
-        """Hash any newly-complete blocks and append them.
+    def attach_block_hasher(
+        self, block_hasher: Callable[[Request], list[BlockHash]]
+    ) -> None:
+        """Bind the KV manager's hasher and hash whatever is already here (F8).
 
-        A no-op until prefix caching lands (M2), because the manager passes no hasher.
+        Attached by the scheduler rather than passed at construction: the frontend
+        builds the request but has no business knowing the block size or the hash
+        algorithm, which are the KV manager's to choose.
         """
+        self._block_hasher = block_hasher
+        self.update_block_hashes()
+
+    def update_block_hashes(self) -> None:
+        """Hash any newly-complete blocks and append them."""
         if self._block_hasher is not None:
             self.block_hashes.extend(self._block_hasher(self))
 

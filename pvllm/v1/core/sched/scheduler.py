@@ -107,6 +107,8 @@ class Scheduler:
             max_model_len=self.max_model_len,
             enable_caching=self.cache_config.enable_prefix_caching,
             log_stats=log_stats,
+            hash_algo=self.cache_config.prefix_caching_hash_algo,
+            seed=vllm_config.sim_config.seed,
         )
 
         #: Every request the scheduler knows about, by id.
@@ -125,6 +127,11 @@ class Scheduler:
     # --- admission -----------------------------------------------------------
 
     def add_request(self, request: Request) -> None:
+        # F8: hashing policy belongs to the KV manager, so the hasher is attached
+        # here rather than at Request construction, where the frontend would have to
+        # know the block size and the algorithm.
+        if self.kv_cache_manager.block_hasher is not None:
+            request.attach_block_hasher(self.kv_cache_manager.block_hasher)
         self.waiting.add_request(request)
         self.requests[request.request_id] = request
 

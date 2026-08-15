@@ -27,9 +27,11 @@ from collections.abc import Iterable, Sequence
 from pvllm import envs
 from pvllm.logger import init_logger
 from pvllm.v1.core.kv_cache_utils import (
+    BlockHash,
     BlockHashWithGroupId,
     FreeKVCacheBlockQueue,
     KVCacheBlock,
+    make_block_hash_with_group_id,
 )
 
 logger = init_logger(__name__)
@@ -56,14 +58,6 @@ class BlockPool:
                 f"model derives this; a non-positive value means the KV pool did not "
                 f"fit (requirement R10.5)."
             )
-        if enable_caching:
-            raise NotImplementedError(
-                "prefix caching (requirements R6.3--R6.5) lands in M2. Running with "
-                "it enabled but unimplemented would report a 0% hit rate on a "
-                "workload that should hit, which is a wrong answer rather than a "
-                "missing feature. Pass --no-enable-prefix-caching until M2."
-            )
-
         self.num_gpu_blocks = num_gpu_blocks
         # Annotated explicitly: the guard above narrows the parameter to False, and
         # without this the unhashed-block branch below reads as dead code.
@@ -81,6 +75,8 @@ class BlockPool:
             BlockHashWithGroupId, dict[int, KVCacheBlock]
         ] = {}
 
+        #: R6.9. Eviction count, for the cache-effectiveness metrics.
+        self.num_evicted_blocks = 0
         self._debug_invariants = envs.PVLLM_DEBUG_INVARIANTS
 
     # --- allocation ----------------------------------------------------------
@@ -156,7 +152,8 @@ class BlockPool:
     def _maybe_evict_cached_block(self, block: KVCacheBlock) -> bool:
         """Drop a block's cache entry as it is reallocated. Returns whether it had one.
 
-        Always False until M2, since nothing is ever cached.
+        R6.2: the hash is cleared here, which is what makes eviction a real event
+        rather than a stale entry pointing at reused memory.
         """
         block_hash = block.block_hash
         if block_hash is None:
@@ -168,7 +165,53 @@ class BlockPool:
             if not entries:
                 del self.cached_block_hash_to_block[block_hash]
         block.reset_hash()
+        self.num_evicted_blocks += 1
         return True
+
+    # --- prefix cache (R6.3--R6.5) -------------------------------------------
+
+    def get_cached_block(
+        self, block_hash: BlockHash, group_id: int
+    ) -> KVCacheBlock | None:
+        """The block holding this content, if any is still resident.
+
+        Any of them: several blocks can hold identical content when two requests
+        raced to cache it before either was evicted. They are interchangeable, so
+        the first is as good as any.
+        """
+        key = make_block_hash_with_group_id(block_hash, group_id)
+        entries = self.cached_block_hash_to_block.get(key)
+        if not entries:
+            return None
+        return next(iter(entries.values()))
+
+    def cache_full_blocks(
+        self,
+        request_block_hashes: list[BlockHash],
+        blocks: list[KVCacheBlock],
+        num_cached_blocks: int,
+        num_full_blocks: int,
+        group_id: int,
+    ) -> None:
+        """Register blocks that just became full. R6.5.
+
+        Called immediately on allocation rather than when the request finishes: a
+        block whose contents are complete can be shared *now*, and waiting until the
+        request ends would miss every hit from a concurrent request with the same
+        prefix -- which is the common case a prefix cache exists to serve.
+        """
+        if num_full_blocks <= num_cached_blocks:
+            return
+
+        for i in range(num_cached_blocks, num_full_blocks):
+            if i >= len(request_block_hashes) or i >= len(blocks):
+                break
+            block = blocks[i]
+            if block.block_hash is not None:
+                continue
+            key = make_block_hash_with_group_id(request_block_hashes[i], group_id)
+            block.set_block_hash(key)
+            self.cached_block_hash_to_block.setdefault(key, {})[block.block_id] = block
 
     # --- introspection -------------------------------------------------------
 
@@ -195,6 +238,7 @@ class BlockPool:
         for block in self.blocks:
             self._maybe_evict_cached_block(block)
         self.cached_block_hash_to_block.clear()
+        self.num_evicted_blocks = 0
         logger.info("Successfully reset prefix cache")
         return True
 

@@ -104,11 +104,48 @@ def test_pool_refuses_a_nonpositive_size():
         BlockPool(0)
 
 
-def test_pool_refuses_to_pretend_prefix_caching_works():
-    """Reporting a 0% hit rate on a workload that should hit is a wrong answer, not
-    a missing feature."""
-    with pytest.raises(NotImplementedError, match="prefix caching"):
-        BlockPool(16, enable_caching=True)
+def test_caching_a_full_block_makes_it_findable():
+    """R6.5: registered on allocation, not at request end -- a full block can be
+    shared now, and waiting would miss every hit from a concurrent request."""
+    from pvllm.v1.core.kv_cache_utils import BlockHash
+
+    pool = BlockPool(8, enable_caching=True)
+    blocks = pool.get_new_blocks(2)
+    hashes = [BlockHash(b"aaa"), BlockHash(b"bbb")]
+
+    pool.cache_full_blocks(hashes, blocks, 0, 2, group_id=0)
+    assert pool.get_cached_block(hashes[0], group_id=0) is blocks[0]
+    assert pool.get_cached_block(hashes[1], group_id=0) is blocks[1]
+    assert pool.get_cached_block(BlockHash(b"zzz"), group_id=0) is None
+
+
+def test_a_block_hash_is_scoped_to_its_kv_cache_group():
+    """R6.7: two groups can produce the same digest for different content."""
+    from pvllm.v1.core.kv_cache_utils import BlockHash
+
+    pool = BlockPool(8, enable_caching=True)
+    blocks = pool.get_new_blocks(1)
+    pool.cache_full_blocks([BlockHash(b"aaa")], blocks, 0, 1, group_id=0)
+
+    assert pool.get_cached_block(BlockHash(b"aaa"), group_id=0) is blocks[0]
+    assert pool.get_cached_block(BlockHash(b"aaa"), group_id=1) is None
+
+
+def test_reallocating_a_cached_block_evicts_its_entry():
+    """R6.2: the hash is cleared on eviction, so no entry ever points at reused
+    memory."""
+    from pvllm.v1.core.kv_cache_utils import BlockHash
+
+    pool = BlockPool(2, enable_caching=True)
+    blocks = pool.get_new_blocks(1)
+    block_hash = BlockHash(b"aaa")
+    pool.cache_full_blocks([block_hash], blocks, 0, 1, group_id=0)
+    pool.free_blocks(blocks)
+
+    # Drain the pool so the cached block must be reused.
+    pool.get_new_blocks(2)
+    assert pool.get_cached_block(block_hash, group_id=0) is None
+    assert pool.num_evicted_blocks >= 1
 
 
 def test_allocation_takes_a_reference_and_shrinks_the_free_pool():

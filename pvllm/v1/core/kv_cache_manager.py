@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING
 from pvllm.logger import init_logger
 from pvllm.v1.core.block_pool import BlockPool
 from pvllm.v1.core.kv_cache_coordinator import get_kv_cache_coordinator
-from pvllm.v1.core.kv_cache_utils import KVCacheBlock
+from pvllm.v1.core.kv_cache_utils import (
+    KVCacheBlock,
+    compute_none_hash,
+    get_hash_fn_by_name,
+    get_request_block_hasher,
+)
 from pvllm.v1.kv_cache_interface import KVCacheConfig
 
 if TYPE_CHECKING:
@@ -81,6 +86,8 @@ class KVCacheManager:
         enable_caching: bool = False,
         enable_kv_cache_events: bool = False,
         log_stats: bool = False,
+        hash_algo: str = "sha256",
+        seed: int = 0,
     ) -> None:
         self.kv_cache_config = kv_cache_config
         self.max_model_len = max_model_len
@@ -104,10 +111,20 @@ class KVCacheManager:
             tuple([] for _ in range(self.num_kv_cache_groups))
         )
 
-        # R6.9. Real counters even in M1, where the hit rate is always zero -- a
-        # metric that only appears once a feature lands is a metric nobody wired up.
+        # R6.9.
         self.prefix_cache_queries = 0
         self.prefix_cache_hits = 0
+
+        # F8: the hasher is handed to each Request at construction, so the manager
+        # owns hashing policy (algorithm, salt, extra keys) and Request only stores
+        # the result.
+        self.hash_fn = get_hash_fn_by_name(hash_algo)
+        self.none_hash = compute_none_hash(self.hash_fn, seed)
+        self.block_hasher = (
+            get_request_block_hasher(self.block_size, self.hash_fn, self.none_hash)
+            if enable_caching
+            else None
+        )
 
     @property
     def usage(self) -> float:
@@ -119,12 +136,37 @@ class KVCacheManager:
     def get_computed_blocks(self, request: Request) -> tuple[KVCacheBlocks, int]:
         """The longest cached prefix for a request, and its token count.
 
-        Always empty until prefix caching lands in M2. The call site exists now so
-        the scheduler's admission path is the real one (R6.4).
+        Walks the request's block hashes from the start and stops at the first miss:
+        a prefix cache is only usable contiguously, since the KV for a gap does not
+        exist and a hit beyond it cannot be read.
+
+        **At least one token is always recomputed.** A request whose every block is
+        cached would otherwise be scheduled with zero new tokens -- nothing to run,
+        no logits, no sampled token, and it would never progress. The rule only bites
+        on an exact full-prompt hit, which makes it the easiest thing here to get
+        wrong and not notice.
         """
-        if not self.enable_caching:
+        if not self.enable_caching or request.num_computed_tokens > 0:
             return self._empty_blocks, 0
-        raise NotImplementedError("prefix cache lookup (requirement R6.4) lands in M2")
+
+        self.prefix_cache_queries += request.num_tokens
+
+        computed: list[KVCacheBlock] = []
+        for block_hash in request.block_hashes:
+            block = self.block_pool.get_cached_block(block_hash, group_id=0)
+            if block is None:
+                break
+            computed.append(block)
+
+        num_computed_tokens = len(computed) * self.block_size
+        if computed and num_computed_tokens == request.num_tokens:
+            computed.pop()
+            num_computed_tokens -= self.block_size
+
+        self.prefix_cache_hits += num_computed_tokens
+        if not computed:
+            return self._empty_blocks, 0
+        return KVCacheBlocks((computed,)), num_computed_tokens
 
     # --- allocation ----------------------------------------------------------
 
@@ -158,24 +200,54 @@ class KVCacheManager:
             self.max_model_len,
         )
 
+        # Blocks hit in the cache are adopted before counting what is still needed,
+        # so a request with a long shared prefix asks the pool for almost nothing.
+        cached_blocks = (
+            new_computed_blocks.blocks[0]
+            if new_computed_blocks is not None and new_computed_blocks.num_blocks
+            else []
+        )
+
         num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
             request.request_id, num_tokens_needing_slots
-        )
+        ) - len(cached_blocks)
 
         # Fail early, before anything is mutated (R6.5).
         if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
             return None
+
+        if cached_blocks:
+            # Take a reference and pull them out of the free queue before anything
+            # else can claim them (R6.5).
+            self.block_pool.touch(cached_blocks)
+            self.coordinator.adopt_cached_blocks(request.request_id, (cached_blocks,))
 
         new_blocks = self.coordinator.allocate_new_blocks(
             request.request_id, num_tokens_needing_slots
         )
 
         if self.enable_caching and not delay_cache_blocks:
-            raise NotImplementedError(
-                "caching full blocks on allocation (requirement R6.5) lands in M2"
-            )
+            self._cache_full_blocks(request, num_computed_tokens + num_new_tokens)
 
         return KVCacheBlocks(new_blocks)
+
+    def _cache_full_blocks(self, request: Request, num_tokens: int) -> None:
+        """Register every block that is now complete. R6.5.
+
+        Immediately, not at request end: a full block can be shared *now*, and
+        waiting would miss every hit from a request running concurrently with this
+        one -- which is the case a prefix cache mostly exists to serve.
+        """
+        blocks = self.coordinator.get_blocks(request.request_id)[0]
+        num_full_blocks = min(num_tokens // self.block_size, len(request.block_hashes))
+        num_already_cached = sum(1 for b in blocks if b.block_hash is not None)
+        self.block_pool.cache_full_blocks(
+            list(request.block_hashes),
+            list(blocks),
+            num_already_cached,
+            num_full_blocks,
+            group_id=0,
+        )
 
     # --- release -------------------------------------------------------------
 
