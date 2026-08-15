@@ -208,6 +208,19 @@ class PrometheusStatLogger:
             "vllm:prefix_cache_hits",
             "Prefix cache hits, in terms of number of cached tokens.",
         )
+        # R14. Upstream's names, without the `_total` the client library appends
+        # (F5). Acceptance *rate* is deliberately not a gauge: it is a ratio of two
+        # counters, and Prometheus computes ratios from counters so a dashboard can
+        # window it. A gauge would report the lifetime average forever.
+        self._counter_spec_draft_tokens = counter(
+            "vllm:spec_decode_num_draft_tokens",
+            "Number of draft tokens proposed [MODELED acceptance]",
+        )
+        self._counter_spec_accepted_tokens = counter(
+            "vllm:spec_decode_num_accepted_tokens",
+            "Number of draft tokens accepted by verification [MODELED acceptance]",
+        )
+
         self._counter_request_success = counter(
             "vllm:request_success",
             "Count of successfully processed requests.",
@@ -304,6 +317,13 @@ class PrometheusStatLogger:
             # dropped step cannot make the series drift from the engine's own count.
             _set_counter(
                 self.counter_num_preempted_reqs, scheduler_stats.num_preemptions
+            )
+            _set_counter(
+                self._counter_spec_draft_tokens, scheduler_stats.num_draft_tokens
+            )
+            _set_counter(
+                self._counter_spec_accepted_tokens,
+                scheduler_stats.num_accepted_tokens,
             )
             _set_counter(
                 self.counter_prefix_cache_queries, scheduler_stats.prefix_cache_queries

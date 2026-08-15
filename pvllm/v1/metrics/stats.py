@@ -24,6 +24,9 @@ class SchedulerStats:
     prefix_cache_hits: int = 0
     num_preemptions: int = 0
     step_index: int = 0
+    #: R14. Cumulative speculative decoding counters. Zero without speculation.
+    num_draft_tokens: int = 0
+    num_accepted_tokens: int = 0
 
 
 @dataclass

@@ -402,6 +402,22 @@
     "type": "histogram"
   },
   {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:spec_decode_num_accepted_tokens",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:spec_decode_num_draft_tokens",
+    "type": "counter"
+  },
+  {
     "buckets": [
       "0.001",
       "0.005",

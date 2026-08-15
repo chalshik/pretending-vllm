@@ -88,6 +88,8 @@ class ServerState:
                 prefix_cache_hits=int(stats["prefix_cache_hits"]),
                 num_preemptions=stats["num_preemptions"],
                 step_index=stats["step_index"],
+                num_draft_tokens=int(stats.get("num_draft_tokens", 0)),
+                num_accepted_tokens=int(stats.get("num_accepted_tokens", 0)),
             ),
             self.engine.take_iteration_stats(),
         )

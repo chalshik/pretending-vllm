@@ -58,6 +58,8 @@ class SimModel:
     output_length_fixed: int = 128
     output_length_range: tuple[int, int] = (16, 256)
     output_length_lognormal: tuple[float, float] = (4.0, 0.75)
+    #: R14. How often a draft is accepted. See SimConfig.spec_acceptance_rate.
+    spec_acceptance_rate: float = 0.7
 
     #: request_id -> how many tokens it will emit before stopping. Decided once, on
     #: first use, so the answer cannot drift mid-generation.
@@ -68,6 +70,51 @@ class SimModel:
     #: conforming text rather than by masking a sampler that has no distribution to
     #: mask.
     _constrained_plans: dict[str, list[int]] = field(default_factory=dict)
+
+    # --- speculative decoding (R14) ------------------------------------------
+
+    def accepted_draft_count(self, request_id: str, num_drafts: int) -> int:
+        """How many of `num_drafts` this step accepts. R14.
+
+        Drawn per draft position at `acceptance_rate`, and stopping at the first
+        rejection -- which is what verification actually does. A run of drafts is
+        accepted only as a prefix, because each one conditions the next: rejecting
+        the second invalidates the third whatever the target thought of it.
+
+        That prefix rule is why the expected accepted count is
+        `sum(rate**i for i in 1..k)` rather than `k * rate`, and why the return on
+        `num_speculative_tokens` falls off so sharply once acceptance drops -- the
+        curve a product tuning it needs to see.
+        """
+        if num_drafts <= 0 or self.spec_acceptance_rate <= 0.0:
+            return 0
+        rng = self.rng_factory.for_request(request_id)
+        accepted = 0
+        for _ in range(num_drafts):
+            if float(rng.random()) >= self.spec_acceptance_rate:
+                break
+            accepted += 1
+        return accepted
+
+    def propose_drafts(
+        self, request_id: str, position: int, num_drafts: int, max_tokens: int
+    ) -> list[int]:
+        """Draft continuations for the next step. R14.
+
+        Content-free by construction: what a draft *is* only matters through whether
+        the target accepts it, and that is drawn rather than compared. The ids are
+        the ones this request would emit anyway, so a run with speculation on
+        produces the same text as one with it off -- which is the property that makes
+        the two comparable at all.
+        """
+        if num_drafts <= 0:
+            return []
+        planned = self.planned_output_length(request_id, max_tokens)
+        return [
+            self.sample_token(request_id, position + offset, max_tokens)
+            for offset in range(1, num_drafts + 1)
+            if position + offset < planned
+        ]
 
     # --- structured output (R15) ---------------------------------------------
 
@@ -194,7 +241,10 @@ class SimModel:
         if constrained is not None:
             return constrained[position]
 
-        rng = self.rng_factory.for_request(request_id)
+        # Keyed by position, not drawn from the request's stream: sampling has to be
+        # idempotent, or speculation would not be lossless and a recomputed request
+        # would produce different tokens. See `RngFactory.for_position`.
+        rng = self.rng_factory.for_position(request_id, position)
         if self.content_policy == "pseudoword":
             return int(
                 rng.integers(

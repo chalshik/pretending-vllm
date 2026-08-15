@@ -122,6 +122,7 @@ class Worker:
             output_length_fixed=self.sim_config.output_length_fixed,
             output_length_range=self.sim_config.output_length_range,
             output_length_lognormal=self.sim_config.output_length_lognormal,
+            spec_acceptance_rate=self.sim_config.spec_acceptance_rate,
         )
         self.model_runner = SimModelRunner(self.vllm_config, self.device, sim_model)
         logger.info(

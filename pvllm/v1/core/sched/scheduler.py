@@ -104,6 +104,14 @@ class Scheduler:
         #: R16.1. `None` without LoRA, which is the common case and the reason the
         #: adapter-slot check below costs one attribute test.
         self.lora_config = vllm_config.lora_config
+        #: R14. `None` without speculation. `num_spec_tokens` is read on the hot
+        #: path, so it is unpacked once rather than reached through the config.
+        self.speculative_config = vllm_config.speculative_config
+        self.num_spec_tokens = (
+            self.speculative_config.num_speculative_tokens
+            if self.speculative_config is not None
+            else 0
+        )
 
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
@@ -142,6 +150,11 @@ class Scheduler:
         #: Requests whose grammar failed to compile, for the core to finish with an
         #: error. Held rather than raised: a bad schema fails its own request.
         self.grammar_compile_error_reqs: set[str] = set()
+        #: R14. Rejected drafts from the last step, per request, for the metrics.
+        self.last_num_invalid_spec_tokens: dict[str, int] = {}
+        #: R14. Cumulative draft counters, for `vllm:spec_decode_*`.
+        self.num_draft_tokens_total = 0
+        self.num_accepted_tokens_total = 0
 
     # --- admission -----------------------------------------------------------
 
@@ -194,6 +207,7 @@ class Scheduler:
 
         req_to_new_blocks: dict[str, KVCacheBlocks] = {}
         num_scheduled_tokens: dict[str, int] = {}
+        scheduled_spec_decode_tokens: dict[str, list[int]] = {}
         token_budget = self.max_num_scheduled_tokens
         # Read once: both the running loop and the admission loop cap a request's
         # share of the step by it (R5.4).
@@ -208,7 +222,18 @@ class Scheduler:
         while req_index < len(self.running) and token_budget > 0:
             request = self.running[req_index]
 
-            num_new_tokens = request.num_tokens - request.num_computed_tokens
+            # R14. A decoding request with drafts in hand verifies all of them in
+            # this step: one token for the position the model is at, plus one per
+            # draft. `num_tokens_with_spec` is what makes that fall out of the same
+            # arithmetic every other request uses, rather than needing a decode mode.
+            num_new_tokens = request.num_tokens_with_spec - request.num_computed_tokens
+            assert num_new_tokens > 0, (
+                f"request {request.request_id} has {request.num_computed_tokens} "
+                f"computed tokens against {request.num_tokens_with_spec} total, so "
+                f"this step would schedule {num_new_tokens}. The count ran ahead of "
+                f"the request's history -- under speculation that means rejected "
+                f"drafts were not rolled back (R14)."
+            )
             if 0 < threshold < num_new_tokens:
                 num_new_tokens = threshold
             num_new_tokens = min(num_new_tokens, token_budget)
@@ -266,6 +291,21 @@ class Scheduler:
             req_to_new_blocks[request.request_id] = new_blocks
             num_scheduled_tokens[request.request_id] = num_new_tokens
             token_budget -= num_new_tokens
+
+            # R14. Which drafts this step actually verifies. The budget may have
+            # trimmed the batch, so only the prefix that fits is sent -- and the
+            # rest is dropped rather than carried, because a draft proposed against
+            # a token that has since been superseded is not a draft any more.
+            if request.spec_token_ids:
+                num_spec_scheduled = (
+                    num_new_tokens + request.num_computed_tokens - request.num_tokens
+                )
+                if num_spec_scheduled > 0:
+                    scheduled_spec_decode_tokens[request.request_id] = (
+                        request.spec_token_ids[:num_spec_scheduled]
+                    )
+                request.spec_token_ids = []
+
             req_index += 1
 
         # --- phase 2: encoder inputs -----------------------------------------
@@ -462,7 +502,7 @@ class Scheduler:
             scheduled_cached_reqs=cached_reqs_data,
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
-            scheduled_spec_decode_tokens={},
+            scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
             scheduled_encoder_inputs={},
             num_common_prefix_blocks=num_common_prefix_blocks,
             has_structured_output_requests=bool(structured_output_request_ids),
@@ -544,6 +584,8 @@ class Scheduler:
         request.num_computed_tokens = 0
         request.num_preemptions += 1
         self.num_preemptions_total += 1
+        # R14. Drafts were proposed against a KV cache this request no longer has.
+        request.spec_token_ids = []
 
         # Back to the *front* of the waiting queue: sending it to the back would let
         # newer arrivals overtake it indefinitely.
@@ -562,6 +604,7 @@ class Scheduler:
 
         outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
         still_running: list[Request] = []
+        num_invalid_spec_tokens: dict[str, int] = {}
 
         for request in self.running:
             req_id = request.request_id
@@ -576,6 +619,23 @@ class Scheduler:
                 if index is not None and index < len(sampled_token_ids)
                 else []
             )
+
+            # R14. A step schedules `1 + num_drafts` tokens and gets back
+            # `1 + num_accepted`. Everything in between was computed against drafts
+            # the target rejected, so it has to come back off the count -- otherwise
+            # `num_computed_tokens` runs ahead of the request's actual history and
+            # the next step schedules a negative number of tokens, which is a loop
+            # that never terminates rather than an error that says anything.
+            num_drafts = len(
+                scheduler_output.scheduled_spec_decode_tokens.get(req_id, ())
+            )
+            if num_drafts:
+                self.num_draft_tokens_total += num_drafts
+                self.num_accepted_tokens_total += max(0, len(generated) - 1)
+                rejected = num_drafts - max(0, len(generated) - 1)
+                if rejected > 0:
+                    request.num_computed_tokens -= rejected
+                    num_invalid_spec_tokens[req_id] = rejected
 
             new_token_ids: list[int] = []
             stopped = False
@@ -602,6 +662,22 @@ class Scheduler:
                         num_cached_tokens=request.num_cached_tokens,
                     )
                 )
+
+        self.last_num_invalid_spec_tokens = num_invalid_spec_tokens
+
+        # R14. The drafts the runner proposed for the *next* step. Stored on the
+        # request rather than carried in the output, because whether they are still
+        # usable depends on what the scheduler does next -- a request that gets
+        # preempted before its next step must not verify stale drafts.
+        if model_runner_output.spec_token_ids is not None:
+            for request in still_running:
+                index = model_runner_output.req_id_to_index.get(request.request_id)
+                if index is not None and index < len(
+                    model_runner_output.spec_token_ids
+                ):
+                    request.spec_token_ids = list(
+                        model_runner_output.spec_token_ids[index]
+                    )
 
         self.running = still_running
 
@@ -774,6 +850,8 @@ class Scheduler:
             "num_waiting_reqs": len(self.waiting),
             "kv_cache_usage": self.kv_cache_manager.usage,
             "num_preemptions": self.num_preemptions_total,
+            "num_draft_tokens": self.num_draft_tokens_total,
+            "num_accepted_tokens": self.num_accepted_tokens_total,
             "step_index": self.step_index,
         }
         stats.update(self.kv_cache_manager.make_prefix_cache_stats().as_dict())

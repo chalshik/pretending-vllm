@@ -58,6 +58,13 @@ class SimConfig:
     #: R11.3. Content must detokenize to stable text so HTTP golden tests are possible.
     content_policy: ContentPolicy = "pseudoword"
 
+    #: R14. How often a draft token is accepted, under speculative decoding. The
+    #: one number a simulator cannot derive: it is the agreement between a draft
+    #: model and a target model, and there is neither. Measure it on your real pair
+    #: and set it here; everything downstream -- the scheduling, the token
+    #: accounting, the spec_decode metrics -- is then faithful.
+    spec_acceptance_rate: float = 0.7
+
     #: R19.2. One seed reproduces the whole run.
     seed: int = 0
     #: R19.3. Where the JSONL event trace goes. `None` disables tracing.
@@ -70,6 +77,11 @@ class SimConfig:
             raise ValueError(f"num_devices must be at least 1, got {self.num_devices}")
         if self.time_scale <= 0.0:
             raise ValueError(f"time_scale must be positive, got {self.time_scale}")
+        if not 0.0 <= self.spec_acceptance_rate <= 1.0:
+            raise ValueError(
+                f"spec_acceptance_rate must be in [0, 1], got "
+                f"{self.spec_acceptance_rate}"
+            )
         if self.jitter_sigma < 0.0:
             raise ValueError(
                 f"jitter_sigma must be non-negative, got {self.jitter_sigma}"

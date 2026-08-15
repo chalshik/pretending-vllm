@@ -32,6 +32,7 @@ from pvllm.config import (
 )
 from pvllm.config.lora import LoRAConfig
 from pvllm.config.model import DEFAULT_MODEL
+from pvllm.config.speculative import SpeculativeConfig
 from pvllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -80,7 +81,10 @@ class EngineArgs:
     disable_log_stats: bool = False
 
     # --- deferred subsystems -------------------------------------------------
-    speculative_config: dict[str, Any] | None = None
+    #: R14. Upstream accepts a dict here and resolves it; this takes the resolved
+    #: object, because there is no draft model to resolve *from* and a dict would
+    #: only postpone the same validation to a worse place.
+    speculative_config: SpeculativeConfig | None = None
     kv_transfer_config: dict[str, Any] | None = None
     enable_lora: bool = False
     max_loras: int = 1
@@ -97,6 +101,8 @@ class EngineArgs:
     time_scale: float = 1.0
     cost_model_profile: str = "constant"
     jitter_sigma: float = 0.0
+    #: R14. Simulator knob; see SimConfig.spec_acceptance_rate.
+    spec_acceptance_rate: float = 0.7
     output_length_policy: str = "from_request"
     output_length_fixed: int = 128
     content_policy: str = "pseudoword"
@@ -111,6 +117,7 @@ class EngineArgs:
             time_scale=self.time_scale,
             cost_model_profile=self.cost_model_profile,  # type: ignore[arg-type]
             jitter_sigma=self.jitter_sigma,
+            spec_acceptance_rate=self.spec_acceptance_rate,
             model_card=self.model_card,
             output_length_policy=self.output_length_policy,  # type: ignore[arg-type]
             output_length_fixed=self.output_length_fixed,
@@ -179,10 +186,7 @@ class EngineArgs:
                 "changes both the memory budget and the admission constraint, so it "
                 "is not inferred from the presence of a module."
             )
-        if self.speculative_config is not None:
-            raise NotImplementedError(
-                "speculative decoding (requirement R14) lands in M4"
-            )
+
         if self.kv_transfer_config is not None:
             raise NotImplementedError(
                 "KV transfer and disaggregation (requirement R17) land in M4"
@@ -199,6 +203,7 @@ class EngineArgs:
             ),
             structured_outputs_config=StructuredOutputsConfig(),
             lora_config=lora_config,
+            speculative_config=self.speculative_config,
         )
 
     # --- CLI -----------------------------------------------------------------
@@ -296,6 +301,7 @@ class EngineArgs:
             "--cost-model-profile", default="constant", choices=["constant", "roofline"]
         )
         sim.add_argument("--jitter-sigma", type=float, default=0.0)
+        sim.add_argument("--spec-acceptance-rate", type=float, default=0.7)
         sim.add_argument(
             "--output-length-policy",
             default="from_request",

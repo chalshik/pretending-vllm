@@ -68,7 +68,15 @@ class SimModelRunner:
         self.max_num_batched_tokens = scheduler_config.max_num_batched_tokens
         self.block_size = vllm_config.cache_config.block_size
         self.enforce_eager = model_config.enforce_eager
-        self.decode_query_len = 1
+        # R14. Zero without speculation, which is what keeps the draft path off the
+        # hot loop for the common case.
+        self.num_spec_tokens = (
+            vllm_config.speculative_config.num_speculative_tokens
+            if vllm_config.speculative_config is not None
+            else 0
+        )
+        # A verified step's query is 1 + the drafts it carried.
+        self.decode_query_len = 1 + self.num_spec_tokens
 
         self.req_states = RequestState(
             max_num_reqs=self.max_num_reqs,
@@ -174,6 +182,13 @@ class SimModelRunner:
             self.req_states.set_num_computed_tokens(
                 req_idx, cached.num_computed_tokens[i]
             )
+            # R14. Taken from the scheduler rather than inferred from the tokens
+            # just appended. Under speculation the two differ: a step schedules
+            # `1 + num_drafts` tokens but only the *accepted* ones exist in the
+            # request's history, so counting appends would leave the worker's idea
+            # of the output position behind the scheduler's -- and the model would
+            # re-sample positions it had already emitted.
+            self.req_states.num_output_tokens[req_idx] = cached.num_output_tokens[i]
             new_blocks = cached.new_block_ids[i]
             if new_blocks is not None:
                 self.block_tables.append_block_ids(req_idx, new_blocks)
@@ -304,7 +319,9 @@ class SimModelRunner:
         if plan is None:
             return ModelRunnerOutput.make_empty()
         input_batch, profile = plan
-        return self._finish_step(input_batch, self.device.execute(profile))
+        return self._finish_step(
+            input_batch, self.device.execute(profile), scheduler_output
+        )
 
     async def execute_model_async(
         self, scheduler_output: SchedulerOutput
@@ -326,7 +343,9 @@ class SimModelRunner:
         if plan is None:
             return ModelRunnerOutput.make_empty()
         input_batch, profile = plan
-        return self._finish_step(input_batch, await self.device.execute_async(profile))
+        return self._finish_step(
+            input_batch, await self.device.execute_async(profile), scheduler_output
+        )
 
     def _plan_step(
         self, scheduler_output: SchedulerOutput
@@ -363,10 +382,13 @@ class SimModelRunner:
         )
 
     def _finish_step(
-        self, input_batch: InputBatch, cost: StepCost
+        self,
+        input_batch: InputBatch,
+        cost: StepCost,
+        scheduler_output: SchedulerOutput | None = None,
     ) -> ModelRunnerOutput:
         """Everything after it."""
-        sampler_output = self.sample_tokens(input_batch)
+        sampler_output = self.sample_tokens(input_batch, scheduler_output)
         sampler_output.modeled_duration = cost.duration
 
         # The runner's own view of computed tokens must track what it just processed,
@@ -374,11 +396,27 @@ class SimModelRunner:
         self.postprocess_num_computed_tokens(input_batch)
         return sampler_output
 
-    def sample_tokens(self, input_batch: InputBatch) -> ModelRunnerOutput:
-        """Produce one token per request that finished prefilling this step."""
+    def sample_tokens(
+        self, input_batch: InputBatch, scheduler_output: SchedulerOutput | None = None
+    ) -> ModelRunnerOutput:
+        """Produce this step's tokens per request, and next step's drafts. R14.
+
+        Without speculation that is one token each. With it, a request whose drafts
+        were verified this step emits the accepted prefix plus one -- the target
+        model's own token at the first rejected position, which is what makes
+        speculation lossless: the output is the same sequence either way, produced in
+        fewer steps.
+        """
         req_ids = input_batch.req_ids
         sampled: list[list[int]] = [[] for _ in req_ids]
+        drafts: list[list[int]] = [[] for _ in req_ids]
         logprobs: LogprobsLists | None = None
+
+        scheduled_drafts = (
+            scheduler_output.scheduled_spec_decode_tokens
+            if scheduler_output is not None
+            else {}
+        )
 
         sampling_indices = np.flatnonzero(~input_batch.is_prefilling_np)
         for batch_idx in sampling_indices:
@@ -390,15 +428,26 @@ class SimModelRunner:
                 int(self.req_states.max_seq_len[req_idx])
                 - int(self.req_states.prompt_len[req_idx]),
             )
-            sampled[int(batch_idx)] = [
-                self.sim_model.sample_token(req_id, position, max_tokens)
+
+            # Verify whatever drafts this step carried, then sample the token at the
+            # first position they did not cover.
+            num_drafts = len(scheduled_drafts.get(req_id, ()))
+            accepted = self.sim_model.accepted_draft_count(req_id, num_drafts)
+            tokens = [
+                self.sim_model.sample_token(req_id, position + offset, max_tokens)
+                for offset in range(accepted + 1)
             ]
+            sampled[int(batch_idx)] = tokens
+            drafts[int(batch_idx)] = self.sim_model.propose_drafts(
+                req_id, position + len(tokens) - 1, self.num_spec_tokens, max_tokens
+            )
 
         return ModelRunnerOutput(
             req_ids=list(req_ids),
             req_id_to_index={req_id: i for i, req_id in enumerate(req_ids)},
             sampled_token_ids=sampled,
             logprobs=logprobs,
+            spec_token_ids=drafts if self.num_spec_tokens else None,
         )
 
     def postprocess_num_computed_tokens(self, input_batch: InputBatch) -> None:

@@ -73,6 +73,30 @@ class RngFactory:
             self._request_cache[request_id] = generator
         return generator
 
+    def for_position(self, request_id: str, position: int) -> np.random.Generator:
+        """A generator for one request's token at one output position. R19.2.
+
+        Derived from `(seed, request_id, position)` rather than drawn from the
+        request's stream, so `for_position(r, 7)` gives the same answer however many
+        times it is asked and whatever was asked before it. That idempotence is not a
+        nicety:
+
+        * **Speculative decoding needs it to be lossless.** Drafting samples
+          positions ahead of where the request actually is. Off a shared stream those
+          draws would consume the entropy the real tokens were going to use, so a
+          speculated run would produce different text from an unspeculated one --
+          and the whole claim of speculation is that it produces the same text
+          faster.
+        * **Preemption-recompute equivalence falls out for free** (R21.1). A
+          recomputed request re-samples positions it already sampled; off a shared
+          stream it would get different tokens the second time.
+
+        Uncached, unlike `for_request`: the whole point is that the answer depends on
+        the key rather than on history, so there is no stream state to keep.
+        """
+        entropy = _derive_entropy(self._seed, "position", f"{request_id}:{position}")
+        return np.random.default_rng(np.random.SeedSequence(entropy))
+
     def stream(self, name: str) -> np.random.Generator:
         """An engine-level stream that is not scoped to a request.
 
