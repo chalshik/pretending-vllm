@@ -289,12 +289,18 @@ def test_queries_and_hits_are_counted():
     manager = make_manager()
     prefix = list(range(16))
     admit(manager, make_request(manager, "a", [*prefix, 100, 101, 102, 103]))
-    assert manager.prefix_cache_queries == 20
-    assert manager.prefix_cache_hits == 0
+    stats = manager.make_prefix_cache_stats()
+    assert stats.queries == 20
+    assert stats.hits == 0
+    assert stats.hit_rate == 0.0
 
     admit(manager, make_request(manager, "b", [*prefix, 200, 201, 202, 203]))
-    assert manager.prefix_cache_queries == 40
-    assert manager.prefix_cache_hits == 16
+    stats = manager.make_prefix_cache_stats()
+    assert stats.queries == 40
+    assert stats.hits == 16
+    assert stats.hit_rate == 0.4
+    # Counted in tokens, not blocks, so the rate is comparable across block sizes.
+    assert stats.cached_blocks > 0
 
 
 def test_reset_clears_the_cache_and_the_counters():
@@ -306,7 +312,8 @@ def test_reset_clears_the_cache_and_the_counters():
     manager.free(request)
 
     assert manager.reset_prefix_cache() is True
-    assert manager.make_prefix_cache_stats() == (0, 0)
+    stats = manager.make_prefix_cache_stats()
+    assert (stats.queries, stats.hits, stats.cached_blocks) == (0, 0, 0)
 
     after = make_request(manager, "b", tokens)
     _, num_cached = manager.get_computed_blocks(after)

@@ -27,7 +27,8 @@ async def client():
         block_size=16,
         max_num_batched_tokens=256,
         max_num_seqs=4,
-        enable_prefix_caching=False,
+        # Prefix caching is on by default, as upstream (R1.4). It was disabled here
+        # while M1 could not implement it.
         device_card="workstation-24gb",
         disable_log_stats=True,
     ).create_engine_config()
@@ -448,3 +449,91 @@ async def test_token_id_prompts_are_accepted(client):
 async def test_an_empty_prompt_is_refused(client):
     response = await client.post("/v1/completions", json={"model": MODEL, "prompt": []})
     assert response.status_code == 400
+
+
+# --- latency histograms actually populate (R12.1) ---------------------------
+
+
+async def test_latency_histograms_have_observations_after_a_request(client):
+    """The histograms existed from M1 but nothing populated them, so every latency
+    panel on a dashboard read empty. This is the test that would have caught it."""
+    await client.post(
+        "/v1/completions", json={"model": MODEL, "prompt": "hello", "max_tokens": 6}
+    )
+    body = (await client.get("/metrics")).text
+
+    counts = {
+        line.split("{")[0]: float(line.rsplit(" ", 1)[1])
+        for line in body.splitlines()
+        if line.startswith("vllm:") and "_count" in line.split("{")[0]
+    }
+    for metric in (
+        "vllm:e2e_request_latency_seconds_count",
+        "vllm:time_to_first_token_seconds_count",
+        "vllm:request_prompt_tokens_count",
+        "vllm:request_generation_tokens_count",
+    ):
+        assert counts.get(metric, 0) >= 1, f"{metric} has no observations"
+
+
+async def test_inter_token_latency_is_observed_for_multi_token_requests(client):
+    await client.post(
+        "/v1/completions", json={"model": MODEL, "prompt": "hello", "max_tokens": 8}
+    )
+    body = (await client.get("/metrics")).text
+    line = next(
+        ln
+        for ln in body.splitlines()
+        if ln.startswith("vllm:inter_token_latency_seconds_count")
+    )
+    assert float(line.rsplit(" ", 1)[1]) > 0
+
+
+async def test_request_success_is_labelled_by_finish_reason(client):
+    await client.post(
+        "/v1/completions", json={"model": MODEL, "prompt": "x", "max_tokens": 4}
+    )
+    body = (await client.get("/metrics")).text
+    assert "vllm:request_success_total{" in body
+    assert 'finished_reason="length"' in body
+
+
+async def test_observations_are_not_double_counted_across_scrapes(client):
+    """Each observation belongs in a histogram exactly once. A scrape that left
+    them pending would re-observe every request on every subsequent scrape."""
+    await client.post(
+        "/v1/completions", json={"model": MODEL, "prompt": "x", "max_tokens": 3}
+    )
+
+    def e2e_count(text: str) -> float:
+        line = next(
+            ln
+            for ln in text.splitlines()
+            if ln.startswith("vllm:e2e_request_latency_seconds_count")
+        )
+        return float(line.rsplit(" ", 1)[1])
+
+    first = e2e_count((await client.get("/metrics")).text)
+    second = e2e_count((await client.get("/metrics")).text)
+    assert first == second == 1.0
+
+
+async def test_prefix_cache_counters_move_on_a_shared_prefix(client):
+    """R6.9 through the HTTP surface."""
+    shared = "shared preamble " * 20
+    await client.post(
+        "/v1/completions",
+        json={"model": MODEL, "prompt": shared + "a", "max_tokens": 2},
+    )
+    await client.post(
+        "/v1/completions",
+        json={"model": MODEL, "prompt": shared + "b", "max_tokens": 2},
+    )
+    body = (await client.get("/metrics")).text
+
+    hits = next(
+        float(ln.rsplit(" ", 1)[1])
+        for ln in body.splitlines()
+        if ln.startswith("vllm:prefix_cache_hits_total")
+    )
+    assert hits > 0

@@ -18,10 +18,9 @@ inputs against a separate budget, then admission from waiting. The order is not
 arbitrary -- serving in-progress requests before admitting new ones is what bounds
 latency for work already accepted, and reversing it changes every trace.
 
-Deferred to later milestones, with the call sites present so the shape is right:
-chunked prefill splitting (M2), prefix caching (M2), encoder inputs (M4), speculative
-decoding (M4), structured output (M4). Preemption by recompute is *here*, because the
-scheduler cannot make progress under a full KV pool without it.
+Deferred to M4, with the call sites present so the shape is right: encoder inputs,
+speculative decoding, structured output. Everything else -- continuous batching,
+chunked prefill, prefix caching, and preemption by recompute -- is here.
 """
 
 from __future__ import annotations
@@ -100,6 +99,7 @@ class Scheduler:
             self.scheduler_config.max_num_batched_tokens
         )
         self.max_model_len = self.scheduler_config.max_model_len
+        self.max_num_partial_prefills = self.scheduler_config.max_num_partial_prefills
         self.policy = SchedulingPolicy(self.scheduler_config.policy)
 
         self.kv_cache_manager = KVCacheManager(
@@ -148,6 +148,10 @@ class Scheduler:
 
     def get_kv_cache_usage(self) -> float:
         return self.kv_cache_manager.usage
+
+    def _num_partial_prefills(self) -> int:
+        """Running requests whose prompt is not yet fully computed. R5.4."""
+        return sum(1 for request in self.running if request.is_prefill_chunk)
 
     # --- the step ------------------------------------------------------------
 
@@ -248,16 +252,28 @@ class Scheduler:
                 if len(self.running) >= self.max_num_running_reqs:
                     break
 
+                # R5.4: cap how many requests may be mid-prefill at once. Without
+                # it, a burst of long prompts all start chunking together and each
+                # one's first token waits for every other prompt to finish
+                # prefilling -- the batch stays busy while every TTFT gets worse.
+                if (
+                    self.scheduler_config.enable_chunked_prefill
+                    and self._num_partial_prefills() >= self.max_num_partial_prefills
+                ):
+                    break
+
                 request = self.waiting.peek_request()
 
-                # Prefix cache lookup. Empty until M2, but on the real path so
-                # admission accounting does not change when caching lands.
+                # R6.4. On the real path, so admission accounting is identical
+                # whether or not the cache is enabled.
                 new_computed_blocks, num_new_local_computed_tokens = (
                     self.kv_cache_manager.get_computed_blocks(request)
                 )
                 num_computed_tokens = num_new_local_computed_tokens
 
                 num_new_tokens = request.num_tokens - num_computed_tokens
+                # R5.4: cap any single request's share of the step, so one very long
+                # prompt cannot monopolize a step and stall every decode behind it.
                 if 0 < threshold < num_new_tokens:
                     num_new_tokens = threshold
 
@@ -582,16 +598,15 @@ class Scheduler:
 
     def make_stats(self) -> dict[str, Any]:
         """A snapshot for the metrics layer (R12.1)."""
-        queries, hits = self.kv_cache_manager.make_prefix_cache_stats()
-        return {
+        stats: dict[str, Any] = {
             "num_running_reqs": len(self.running),
             "num_waiting_reqs": len(self.waiting),
             "kv_cache_usage": self.kv_cache_manager.usage,
-            "prefix_cache_queries": queries,
-            "prefix_cache_hits": hits,
             "num_preemptions": self.num_preemptions_total,
             "step_index": self.step_index,
         }
+        stats.update(self.kv_cache_manager.make_prefix_cache_stats().as_dict())
+        return stats
 
 
 __all__ = ["EngineCoreEventType", "FinishReason", "Scheduler"]

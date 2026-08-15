@@ -25,6 +25,8 @@ def make_scheduler(
     max_model_len: int = 128,
     enable_chunked_prefill: bool = True,
     policy: str = "fcfs",
+    long_prefill_token_threshold: int = 0,
+    max_num_partial_prefills: int = 1,
 ) -> Scheduler:
     vllm_config = VllmConfig(
         model_config=ModelConfig(model="tiny-test", max_model_len=max_model_len),
@@ -35,6 +37,8 @@ def make_scheduler(
             max_model_len=max_model_len,
             enable_chunked_prefill=enable_chunked_prefill,
             policy=policy,
+            long_prefill_token_threshold=long_prefill_token_threshold,
+            max_num_partial_prefills=max_num_partial_prefills,
         ),
     )
     spec = FullAttentionSpec(
@@ -67,26 +71,29 @@ def make_request(
     )
 
 
-def runner_output(scheduler_output, token: int = 999) -> ModelRunnerOutput:
-    """Emit one token for every request that finished its prompt this step."""
+def runner_output(scheduler, scheduler_output, token: int = 999) -> ModelRunnerOutput:
+    """Stand in for `SimModelRunner`.
+
+    A request still mid-prefill produces no logits and therefore no token, and the
+    real runner returns an empty list for it. The first version of this helper
+    guessed from `scheduled_new_reqs`, which only sees a request's *first* chunk --
+    so from the second chunk onward it handed out tokens the real runner would never
+    produce, and chunked-prefill tests measured a contract the runner does not honour.
+
+    `schedule()` has already advanced `num_computed_tokens` and set
+    `is_prefill_chunk` by the time this runs, so the request's own state is the
+    authority.
+    """
     req_ids = list(scheduler_output.num_scheduled_tokens)
-    sampled = []
-    for req_id in req_ids:
-        # A request still being prefilled gets nothing back, as upstream does.
-        sampled.append([token] if not _is_prefilling(scheduler_output, req_id) else [])
+    sampled = [
+        [] if scheduler.requests[req_id].is_prefill_chunk else [token]
+        for req_id in req_ids
+    ]
     return ModelRunnerOutput(
         req_ids=req_ids,
         req_id_to_index={r: i for i, r in enumerate(req_ids)},
         sampled_token_ids=sampled,
     )
-
-
-def _is_prefilling(scheduler_output, req_id: str) -> bool:
-    for new in scheduler_output.scheduled_new_reqs:
-        if new.req_id == req_id:
-            scheduled = scheduler_output.num_scheduled_tokens[req_id]
-            return new.num_computed_tokens + scheduled < len(new.prompt_token_ids or ())
-    return False
 
 
 # --- the budget ------------------------------------------------------------
@@ -131,7 +138,7 @@ def test_running_requests_are_served_before_new_admissions():
     scheduler.add_request(make_request("first", prompt_len=8))
     first = scheduler.schedule()
     assert [r.req_id for r in first.scheduled_new_reqs] == ["first"]
-    scheduler.update_from_output(first, runner_output(first))
+    scheduler.update_from_output(first, runner_output(scheduler, first))
 
     scheduler.add_request(make_request("second", prompt_len=8))
     second = scheduler.schedule()
@@ -146,7 +153,7 @@ def test_decode_costs_one_token_per_step():
 
     prefill = scheduler.schedule()
     assert prefill.num_scheduled_tokens["r0"] == 8
-    scheduler.update_from_output(prefill, runner_output(prefill))
+    scheduler.update_from_output(prefill, runner_output(scheduler, prefill))
 
     decode = scheduler.schedule()
     assert decode.num_scheduled_tokens["r0"] == 1
@@ -159,7 +166,7 @@ def test_new_requests_carry_block_ids_and_cached_ones_carry_diffs():
 
     first = scheduler.schedule()
     assert first.scheduled_new_reqs[0].block_ids == ([0, 1],)
-    scheduler.update_from_output(first, runner_output(first))
+    scheduler.update_from_output(first, runner_output(scheduler, first))
 
     second = scheduler.schedule()
     cached = second.scheduled_cached_reqs
@@ -177,12 +184,12 @@ def test_request_finishes_at_max_tokens_and_frees_its_blocks():
     scheduler.add_request(make_request("r0", prompt_len=8, max_tokens=2))
 
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
     for _ in range(4):
         if not scheduler.running:
             break
         output = scheduler.schedule()
-        scheduler.update_from_output(output, runner_output(output))
+        scheduler.update_from_output(output, runner_output(scheduler, output))
 
     assert scheduler.running == []
     assert scheduler.get_kv_cache_usage() == 0.0
@@ -194,7 +201,7 @@ def test_finished_ids_reach_the_worker_exactly_once():
     scheduler.add_request(make_request("r0", prompt_len=4, max_tokens=1))
 
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
     assert scheduler.running == []
 
     following = scheduler.schedule()
@@ -213,7 +220,7 @@ def test_stop_token_finishes_the_request():
     scheduler.add_request(request)
 
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output, token=42))
+    scheduler.update_from_output(output, runner_output(scheduler, output, token=42))
 
     assert request.status is RequestStatus.FINISHED_STOPPED
     assert request.stop_reason == 42
@@ -252,7 +259,7 @@ def test_preemption_frees_blocks_and_requeues_at_the_front():
     scheduler.add_request(make_request("b", prompt_len=8, max_tokens=16))
 
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
 
     # Both are now decoding into a pool with no spare blocks; the next append
     # forces a preemption.
@@ -262,7 +269,7 @@ def test_preemption_frees_blocks_and_requeues_at_the_front():
         if output.preempted_req_ids:
             preempted_seen = True
             break
-        scheduler.update_from_output(output, runner_output(output))
+        scheduler.update_from_output(output, runner_output(scheduler, output))
 
     assert preempted_seen, "a full KV pool must eventually force preemption"
     assert scheduler.num_preemptions_total >= 1
@@ -276,14 +283,14 @@ def test_fcfs_preempts_the_most_recently_admitted():
     scheduler.add_request(make_request("second", prompt_len=8, max_tokens=16))
 
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
 
     for _ in range(6):
         output = scheduler.schedule()
         if output.preempted_req_ids:
             assert output.preempted_req_ids == {"second"}
             return
-        scheduler.update_from_output(output, runner_output(output))
+        scheduler.update_from_output(output, runner_output(scheduler, output))
     pytest.fail("expected a preemption")
 
 
@@ -292,7 +299,7 @@ def test_preempted_request_resets_computed_tokens_but_keeps_output():
     request = make_request("a", prompt_len=8, max_tokens=16)
     scheduler.add_request(request)
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
     produced = request.num_output_tokens
 
     scheduler._preempt_request(request)
@@ -309,7 +316,7 @@ def test_admission_pauses_on_a_step_that_preempted():
     scheduler.add_request(make_request("a", prompt_len=8, max_tokens=16))
     scheduler.add_request(make_request("b", prompt_len=8, max_tokens=16))
     output = scheduler.schedule()
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
     scheduler.add_request(make_request("c", prompt_len=8, max_tokens=16))
 
     for _ in range(6):
@@ -317,7 +324,7 @@ def test_admission_pauses_on_a_step_that_preempted():
         if output.preempted_req_ids:
             assert output.scheduled_new_reqs == []
             return
-        scheduler.update_from_output(output, runner_output(output))
+        scheduler.update_from_output(output, runner_output(scheduler, output))
     pytest.fail("expected a preemption")
 
 
@@ -338,7 +345,7 @@ def test_a_mixed_workload_drains_completely():
     steps = 0
     while scheduler.has_requests() and steps < 500:
         output = scheduler.schedule()
-        scheduler.update_from_output(output, runner_output(output))
+        scheduler.update_from_output(output, runner_output(scheduler, output))
         steps += 1
 
     assert not scheduler.running
@@ -361,7 +368,7 @@ def test_the_same_workload_yields_the_same_step_count():
         while scheduler.has_requests() and steps < 200:
             output = scheduler.schedule()
             per_step.append(output.total_num_scheduled_tokens)
-            scheduler.update_from_output(output, runner_output(output))
+            scheduler.update_from_output(output, runner_output(scheduler, output))
             steps += 1
         return steps, per_step
 
@@ -386,7 +393,7 @@ def test_without_chunked_prefill_a_prompt_waits_for_a_whole_step():
 
     # "big" needs the whole budget, so it waits for "small" to finish rather than
     # being chunked into the leftovers.
-    scheduler.update_from_output(output, runner_output(output))
+    scheduler.update_from_output(output, runner_output(scheduler, output))
     assert scheduler.running == []
 
     following = scheduler.schedule()

@@ -84,12 +84,12 @@ class ServerState:
                 num_running_reqs=stats["num_running_reqs"],
                 num_waiting_reqs=stats["num_waiting_reqs"],
                 kv_cache_usage=stats["kv_cache_usage"],
-                prefix_cache_queries=stats["prefix_cache_queries"],
-                prefix_cache_hits=stats["prefix_cache_hits"],
+                prefix_cache_queries=int(stats["prefix_cache_queries"]),
+                prefix_cache_hits=int(stats["prefix_cache_hits"]),
                 num_preemptions=stats["num_preemptions"],
                 step_index=stats["step_index"],
             ),
-            None,
+            self.engine.take_iteration_stats(),
         )
 
     def shutdown(self) -> None:

@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from pvllm.logger import init_logger
 from pvllm.v1.core.block_pool import BlockPool
 from pvllm.v1.core.kv_cache_coordinator import get_kv_cache_coordinator
+from pvllm.v1.core.kv_cache_metrics import PrefixCacheStats
 from pvllm.v1.core.kv_cache_utils import (
     KVCacheBlock,
     compute_none_hash,
@@ -112,8 +113,7 @@ class KVCacheManager:
         )
 
         # R6.9.
-        self.prefix_cache_queries = 0
-        self.prefix_cache_hits = 0
+        self.prefix_cache_stats = PrefixCacheStats()
 
         # F8: the hasher is handed to each Request at construction, so the manager
         # owns hashing policy (algorithm, salt, extra keys) and Request only stores
@@ -149,7 +149,7 @@ class KVCacheManager:
         if not self.enable_caching or request.num_computed_tokens > 0:
             return self._empty_blocks, 0
 
-        self.prefix_cache_queries += request.num_tokens
+        self.prefix_cache_stats.queries += request.num_tokens
 
         computed: list[KVCacheBlock] = []
         for block_hash in request.block_hashes:
@@ -163,7 +163,7 @@ class KVCacheManager:
             computed.pop()
             num_computed_tokens -= self.block_size
 
-        self.prefix_cache_hits += num_computed_tokens
+        self.prefix_cache_stats.hits += num_computed_tokens
         if not computed:
             return self._empty_blocks, 0
         return KVCacheBlocks((computed,)), num_computed_tokens
@@ -212,8 +212,18 @@ class KVCacheManager:
             request.request_id, num_tokens_needing_slots
         ) - len(cached_blocks)
 
+        # A cached block with no other holder is *in* the free queue, and `touch`
+        # takes it out. So it draws on the same free pool the new blocks do, and
+        # counting it as still available would let an allocation pass the check and
+        # then run the queue dry partway through -- which is a crash rather than the
+        # `None` the scheduler knows how to handle.
+        num_free_cached_blocks = sum(1 for block in cached_blocks if block.ref_cnt == 0)
+
         # Fail early, before anything is mutated (R6.5).
-        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
+        if (
+            num_blocks_to_allocate + num_free_cached_blocks
+            > self.block_pool.get_num_free_blocks()
+        ):
             return None
 
         if cached_blocks:
@@ -284,13 +294,16 @@ class KVCacheManager:
         """R6.10. Also resets the hit-rate counters, matching upstream."""
         if not self.block_pool.reset_prefix_cache():
             return False
-        self.prefix_cache_queries = 0
-        self.prefix_cache_hits = 0
+        self.prefix_cache_stats.reset()
         return True
 
-    def make_prefix_cache_stats(self) -> tuple[int, int]:
-        """`(queries, hits)` since the last reset. R6.9."""
-        return self.prefix_cache_queries, self.prefix_cache_hits
+    def make_prefix_cache_stats(self) -> PrefixCacheStats:
+        """Cache effectiveness since the last reset. R6.9."""
+        self.prefix_cache_stats.evictions = self.block_pool.num_evicted_blocks
+        self.prefix_cache_stats.cached_blocks = len(
+            self.block_pool.cached_block_hash_to_block
+        )
+        return self.prefix_cache_stats
 
     def __repr__(self) -> str:
         return (

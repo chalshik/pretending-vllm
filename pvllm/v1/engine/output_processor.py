@@ -10,7 +10,7 @@ stopped on a *string*, because that needs text (R11.5).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pvllm.logger import init_logger
 from pvllm.outputs import CompletionOutput, RequestOutput
@@ -21,6 +21,7 @@ from pvllm.v1.engine.detokenizer import (
     IncrementalDetokenizer,
     SlowIncrementalDetokenizer,
 )
+from pvllm.v1.metrics.stats import FinishedRequestStats, IterationStats
 
 logger = init_logger(__name__)
 
@@ -38,7 +39,69 @@ class RequestState:
     arrival_time: float
     is_finished: bool = False
     num_cached_tokens: int = 0
-    stats: dict[str, float] = field(default_factory=dict)
+
+    # --- timing (R12.1) ---------------------------------------------------
+    # Every stamp comes from the engine core's clock, so under a virtual clock
+    # these are modeled durations -- which the metric help strings say.
+    #: When the first output token arrived. Zero until it does.
+    first_token_time: float = 0.0
+    #: When the most recent output token arrived, for inter-token latency.
+    last_token_time: float = 0.0
+    num_generation_tokens: int = 0
+
+    def record_tokens(self, now: float, count: int) -> list[float]:
+        """Fold in `count` new tokens. Returns inter-token latencies to observe.
+
+        A step can deliver more than one token (speculative decoding, or a prefill
+        that completes and samples in the same step), and the *observed* gap covers
+        all of them at once. Dividing by the count would report a per-token latency
+        the system never actually exhibited, so the whole gap is attributed once --
+        which is what upstream's histogram measures too.
+        """
+        if count <= 0:
+            return []
+        latencies: list[float] = []
+        if self.first_token_time == 0.0:
+            self.first_token_time = now
+        elif self.last_token_time:
+            latencies.append(now - self.last_token_time)
+        self.last_token_time = now
+        self.num_generation_tokens += count
+        return latencies
+
+    @property
+    def time_to_first_token(self) -> float:
+        return max(0.0, self.first_token_time - self.arrival_time)
+
+    def finished_stats(self, now: float, finish_reason: str) -> FinishedRequestStats:
+        """What this request contributes to the histograms once it ends."""
+        e2e = max(0.0, now - self.arrival_time)
+        ttft = self.time_to_first_token
+        # Decode time is everything after the first token; a request that produced
+        # only one token has none, and reporting its whole lifetime as decode would
+        # skew the decode histogram toward prefill cost.
+        decode = max(0.0, now - self.first_token_time) if self.first_token_time else 0.0
+        num_after_first = max(0, self.num_generation_tokens - 1)
+        return FinishedRequestStats(
+            finish_reason=finish_reason,
+            e2e_latency=e2e,
+            # The queue wait is not separable from prefill without a scheduled-time
+            # stamp from the core, so TTFT stands in for the prefill phase and the
+            # queue histogram stays at zero rather than reporting a made-up split.
+            queue_time=0.0,
+            prefill_time=ttft,
+            inference_time=e2e,
+            decode_time=decode,
+            time_to_first_token=ttft,
+            time_per_output_token=(decode / num_after_first)
+            if num_after_first
+            else 0.0,
+            num_prompt_tokens=len(self.prompt_token_ids),
+            num_generation_tokens=self.num_generation_tokens,
+            num_cached_tokens=self.num_cached_tokens,
+            max_tokens_param=self.sampling_params.max_tokens,
+            n_param=self.sampling_params.n,
+        )
 
 
 class OutputProcessor:
@@ -75,9 +138,15 @@ class OutputProcessor:
             self.request_states.pop(request_id, None)
 
     def process_outputs(
-        self, engine_core_outputs: list[EngineCoreOutput]
+        self,
+        engine_core_outputs: list[EngineCoreOutput],
+        now: float = 0.0,
+        iteration_stats: IterationStats | None = None,
     ) -> list[RequestOutput]:
-        """Fold one step's output into per-request text."""
+        """Fold one step's output into per-request text, and time it.
+
+        `now` is the engine core's clock (R19.1); the frontend has none of its own.
+        """
         outputs: list[RequestOutput] = []
 
         for engine_output in engine_core_outputs:
@@ -99,6 +168,16 @@ class OutputProcessor:
 
             finished = finish_reason is not None
             state.num_cached_tokens = engine_output.num_cached_tokens
+
+            num_new = len(engine_output.new_token_ids)
+            latencies = state.record_tokens(now, num_new)
+            if iteration_stats is not None:
+                iteration_stats.num_generation_tokens += num_new
+                iteration_stats.inter_token_latencies.extend(latencies)
+                if num_new and state.num_generation_tokens == num_new:
+                    iteration_stats.time_to_first_tokens.append(
+                        state.time_to_first_token
+                    )
 
             delta = state.sampling_params.output_kind == RequestOutputKind.DELTA
             text = state.detokenizer.get_next_output_text(finished, delta)
@@ -132,6 +211,10 @@ class OutputProcessor:
 
             if finished:
                 state.is_finished = True
+                if iteration_stats is not None:
+                    iteration_stats.finished_requests.append(
+                        state.finished_stats(now, str(finish_reason))
+                    )
                 self.request_states.pop(engine_output.request_id, None)
 
         return outputs

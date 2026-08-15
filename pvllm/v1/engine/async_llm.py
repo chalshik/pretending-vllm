@@ -35,6 +35,7 @@ from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine.core_client import EngineCoreClient, InprocClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
+from pvllm.v1.metrics.stats import IterationStats
 
 logger = init_logger(__name__)
 
@@ -66,6 +67,9 @@ class AsyncLLM:
 
         self._queues: dict[str, asyncio.Queue[RequestOutput | BaseException]] = {}
         self._output_handler: asyncio.Task[None] | None = None
+        #: Accumulated since the last drain. `/metrics` takes and clears it, so a
+        #: histogram observation is recorded exactly once however often it scrapes.
+        self._pending_stats = IterationStats()
 
     @classmethod
     def from_engine_args(cls, engine_args: AsyncEngineArgs) -> AsyncLLM:
@@ -89,10 +93,12 @@ class AsyncLLM:
                         return
                     continue
 
+                assert isinstance(self.engine_core, InprocClient)
+                now = self.engine_core.clock_time
                 engine_core_outputs = self.engine_core.get_output()
                 for client_outputs in engine_core_outputs.values():
                     request_outputs = self.output_processor.process_outputs(
-                        client_outputs.outputs
+                        client_outputs.outputs, now, self._pending_stats
                     )
                     stopped_by_string: list[str] = []
                     for output in request_outputs:
@@ -193,6 +199,16 @@ class AsyncLLM:
     def make_stats(self) -> dict[str, Any]:
         assert isinstance(self.engine_core, InprocClient)
         return self.engine_core.make_stats()
+
+    def take_iteration_stats(self) -> IterationStats:
+        """Drain the accumulated per-request timings.
+
+        Taken rather than read: each observation belongs in a histogram exactly
+        once, and a scrape that left them in place would re-observe every request on
+        every subsequent scrape, inflating the counts without bound.
+        """
+        stats, self._pending_stats = self._pending_stats, IterationStats()
+        return stats
 
     async def reset_prefix_cache(self) -> bool:
         assert isinstance(self.engine_core, InprocClient)

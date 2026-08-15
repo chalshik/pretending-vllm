@@ -21,6 +21,7 @@ from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine.core_client import EngineCoreClient, InprocClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
+from pvllm.v1.metrics.stats import IterationStats
 
 logger = init_logger(__name__)
 
@@ -47,6 +48,8 @@ class LLMEngine:
         self.engine_core: EngineCoreClient = EngineCoreClient.make_client(
             vllm_config, log_stats=log_stats
         )
+        #: The most recent step's stats, for whoever scrapes them.
+        self.last_iteration_stats = IterationStats()
 
     @classmethod
     def from_engine_args(cls, engine_args: EngineArgs) -> LLMEngine:
@@ -85,11 +88,18 @@ class LLMEngine:
         if not engine_core_outputs:
             return []
 
+        assert isinstance(self.engine_core, InprocClient)
+        now = self.engine_core.clock_time
+        iteration_stats = IterationStats()
+
         outputs: list[RequestOutput] = []
         for client_outputs in engine_core_outputs.values():
             outputs.extend(
-                self.output_processor.process_outputs(client_outputs.outputs)
+                self.output_processor.process_outputs(
+                    client_outputs.outputs, now, iteration_stats
+                )
             )
+        self.last_iteration_stats = iteration_stats
 
         # R11.5: a stop *string* is invisible to the scheduler, so requests the
         # frontend just ended have to be aborted in the core -- otherwise they keep
