@@ -30,6 +30,7 @@ from pvllm.config import (
     StructuredOutputsConfig,
     VllmConfig,
 )
+from pvllm.config.lora import LoRAConfig
 from pvllm.config.model import DEFAULT_MODEL
 from pvllm.logger import init_logger
 
@@ -82,6 +83,11 @@ class EngineArgs:
     speculative_config: dict[str, Any] | None = None
     kv_transfer_config: dict[str, Any] | None = None
     enable_lora: bool = False
+    max_loras: int = 1
+    max_lora_rank: int = 16
+    max_cpu_loras: int | None = None
+    #: R16.1. `name=path` per adapter, served under its own model name.
+    lora_modules: list[str] | None = None
 
     # --- simulator (no upstream counterpart) ---------------------------------
     device_card: str = "datacenter-80gb"
@@ -156,10 +162,22 @@ class EngineArgs:
             policy=self.scheduling_policy,  # type: ignore[arg-type]
         )
 
-        if self.enable_lora:
-            raise NotImplementedError(
-                "LoRA (requirement R16) lands in M4; --enable-lora is rejected rather "
-                "than ignored so a capacity answer is never quietly wrong"
+        # R16.1. Built only when asked for: `None` is what tells the scheduler and
+        # the memory model to skip the adapter paths entirely.
+        lora_config = (
+            LoRAConfig(
+                max_loras=self.max_loras,
+                max_lora_rank=self.max_lora_rank,
+                max_cpu_loras=self.max_cpu_loras,
+            )
+            if self.enable_lora
+            else None
+        )
+        if self.lora_modules and not self.enable_lora:
+            raise ValueError(
+                "--lora-modules was given without --enable-lora. Serving an adapter "
+                "changes both the memory budget and the admission constraint, so it "
+                "is not inferred from the presence of a module."
             )
         if self.speculative_config is not None:
             raise NotImplementedError(
@@ -180,6 +198,7 @@ class EngineArgs:
                 disable_log_stats=self.disable_log_stats
             ),
             structured_outputs_config=StructuredOutputsConfig(),
+            lora_config=lora_config,
         )
 
     # --- CLI -----------------------------------------------------------------
@@ -243,8 +262,21 @@ class EngineArgs:
         # Registered so that asking for a deferred subsystem gets the actionable
         # refusal from create_engine_config rather than an argparse "unrecognized
         # arguments" error that says nothing about why.
-        deferred = parser.add_argument_group("deferred (M4)")
-        deferred.add_argument("--enable-lora", action="store_true")
+        lora = parser.add_argument_group("lora")
+        lora.add_argument("--enable-lora", action="store_true")
+        lora.add_argument("--max-loras", type=int, default=1)
+        lora.add_argument("--max-lora-rank", type=int, default=16)
+        lora.add_argument("--max-cpu-loras", type=int, default=None)
+        lora.add_argument(
+            "--lora-modules",
+            nargs="+",
+            default=None,
+            metavar="NAME=PATH",
+            help=(
+                "adapters to serve, each under its own model name. A request naming "
+                "one is routed to it, exactly as upstream routes them."
+            ),
+        )
 
         sim = parser.add_argument_group(
             "simulator",

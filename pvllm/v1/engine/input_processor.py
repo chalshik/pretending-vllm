@@ -14,6 +14,8 @@ divergence, and it is deliberate.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
 from pvllm.sampling_params import SamplingParams
@@ -42,6 +44,7 @@ class InputProcessor:
         client_index: int = 0,
         priority: int = 0,
         cache_salt: str | None = None,
+        lora_request: Any = None,
     ) -> EngineCoreRequest:
         """Build the wire request. R3.1.
 
@@ -70,6 +73,7 @@ class InputProcessor:
             client_index=client_index,
             cache_salt=cache_salt,
             priority=priority,
+            lora_request=lora_request,
         )
 
     def _validate_params(self, sampling_params: SamplingParams) -> None:

@@ -140,6 +140,7 @@ class AsyncLLM:
         sampling_params: SamplingParams,
         request_id: str,
         priority: int = 0,
+        lora_request: Any = None,
     ) -> AsyncGenerator[RequestOutput, None]:
         """Yield outputs for one request until it finishes.
 
@@ -153,7 +154,11 @@ class AsyncLLM:
 
         try:
             engine_request = self.input_processor.process_inputs(
-                request_id, prompt, sampling_params, priority=priority
+                request_id,
+                prompt,
+                sampling_params,
+                priority=priority,
+                lora_request=lora_request,
             )
             self.engine_core.add_request(engine_request)
             self.output_processor.add_request(

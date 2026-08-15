@@ -339,10 +339,10 @@ def generate_block_hash_extra_keys(request: Request) -> tuple[Any, ...] | None:
     if request.cache_salt is not None:
         keys.append(request.cache_salt)
     if request.lora_request is not None:
-        raise NotImplementedError(
-            "a LoRA adapter id must join the prefix cache extra keys "
-            "(requirement R6.3); LoRA lands in M4"
-        )
+        # R16.1. The id, not the name or the path: it is the adapter's identity, and
+        # two requests referring to one adapter by different names must still share
+        # its cached prefixes.
+        keys.append(request.lora_request.lora_int_id)
     if request.mm_features:
         raise NotImplementedError(
             "multimodal content hashes must join the prefix cache extra keys "

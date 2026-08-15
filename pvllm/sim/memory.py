@@ -138,6 +138,36 @@ def compute_activation_peak_bytes(
     return int(activations + logits)
 
 
+def compute_lora_bytes(
+    model: ModelCard,
+    dtype: str,
+    max_loras: int,
+    max_lora_rank: int,
+    num_target_modules: int = 4,
+    tp_size: int = 1,
+) -> int:
+    """Device memory the resident LoRA adapters occupy. R16.1.
+
+    A LoRA layer replaces a `[d_in, d_out]` update with `A @ B`, where `A` is
+    `[d_in, r]` and `B` is `[r, d_out]`. For the attention projections both
+    dimensions are the hidden size, so one adapted projection costs `2 * r * d`
+    parameters, and an adapter costs that for every targeted projection in every
+    layer.
+
+    **Which projections are targeted is a config-wide assumption here**, defaulting to
+    the four attention projections. Upstream reads it from each adapter's own config,
+    so an adapter that also targets the MLP costs more than this reports -- the MLP
+    projections are several times wider. The direction of the error is optimistic,
+    which is worth knowing when the answer is a capacity number.
+    """
+    if max_loras < 1 or max_lora_rank < 1:
+        return 0
+    hidden = model.hidden_size
+    per_projection = 2 * max_lora_rank * hidden
+    per_adapter = per_projection * num_target_modules * model.num_hidden_layers
+    return (per_adapter * DTYPE_BYTES[dtype] * max_loras) // tp_size
+
+
 def compute_memory_profile(
     model: ModelCard,
     device: DeviceCard,
@@ -154,6 +184,7 @@ def compute_memory_profile(
     non_torch_overhead_bytes: int = DEFAULT_NON_TORCH_OVERHEAD_BYTES,
     graph_bytes: int = 0,
     num_gpu_blocks_override: int | None = None,
+    lora_bytes: int = 0,
 ) -> MemoryProfile:
     """Derive the KV pool and `num_gpu_blocks`. R10.2, R10.5, R10.6."""
     capacity = device.memory_bytes
@@ -167,8 +198,15 @@ def compute_memory_profile(
     kv_bytes_per_token = model.kv_bytes_per_token(kv_cache_dtype, tp_size) // pp_size
     kv_bytes_per_block = block_size * kv_bytes_per_token
 
+    # R16.1. Adapter weights are resident on the device and come out of the same
+    # budget as everything else, so serving eight adapters shrinks the KV pool.
     kv_pool = (
-        usable - weight_bytes - activation_peak - non_torch_overhead_bytes - graph_bytes
+        usable
+        - weight_bytes
+        - activation_peak
+        - non_torch_overhead_bytes
+        - graph_bytes
+        - lora_bytes
     )
 
     # R10.5: fail at startup, not at request time, and say what to change.
@@ -177,12 +215,14 @@ def compute_memory_profile(
         raise SimOutOfMemoryError(
             f"No memory left for the KV cache. The model's weights "
             f"({weight_bytes / gib:.2f}GiB), modeled activation peak "
-            f"({activation_peak / gib:.2f}GiB), and non-torch overhead "
+            f"({activation_peak / gib:.2f}GiB), LoRA adapters "
+            f"({lora_bytes / gib:.2f}GiB), and non-torch overhead "
             f"({non_torch_overhead_bytes / gib:.2f}GiB) already exceed the "
             f"{usable / gib:.2f}GiB budget on a {capacity / gib:.2f}GiB device at "
             f"gpu_memory_utilization={gpu_memory_utilization}.\n"
-            f"Try: raise gpu_memory_utilization, lower max_num_batched_tokens or "
-            f"max_num_seqs, use a smaller model card, or pick a larger device card."
+            f"Try: raise gpu_memory_utilization, lower max_num_batched_tokens, "
+            f"max_num_seqs, or max_loras, use a smaller model card, or pick a larger "
+            f"device card."
         )
 
     num_gpu_blocks = (

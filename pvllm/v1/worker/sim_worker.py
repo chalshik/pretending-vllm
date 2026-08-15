@@ -169,6 +169,7 @@ class Worker:
             tp_size=self.parallel_config.tensor_parallel_size,
             pp_size=self.parallel_config.pipeline_parallel_size,
             num_gpu_blocks_override=self.cache_config.num_gpu_blocks_override,
+            lora_bytes=self._lora_bytes(),
         )
         logger.info("%s", self.memory_profile.summary())
         # The *block count* is what the profile resolved -- including any
@@ -237,6 +238,23 @@ class Worker:
         return None
 
     # --- helpers -------------------------------------------------------------
+
+    def _lora_bytes(self) -> int:
+        """Device memory the resident adapters occupy. R16.1. Zero without LoRA."""
+        lora_config = self.vllm_config.lora_config
+        if lora_config is None:
+            return 0
+        from pvllm.sim.memory import compute_lora_bytes
+
+        assert self.model_card is not None
+        return compute_lora_bytes(
+            self.model_card,
+            self.model_config.resolved_dtype,
+            max_loras=lora_config.max_loras,
+            max_lora_rank=lora_config.max_lora_rank,
+            num_target_modules=len(lora_config.target_modules),
+            tp_size=self.parallel_config.tensor_parallel_size,
+        )
 
     def _weight_bytes(self) -> int:
         from pvllm.sim.memory import compute_weight_bytes

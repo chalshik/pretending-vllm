@@ -101,6 +101,9 @@ class Scheduler:
         self.max_model_len = self.scheduler_config.max_model_len
         self.max_num_partial_prefills = self.scheduler_config.max_num_partial_prefills
         self.policy = SchedulingPolicy(self.scheduler_config.policy)
+        #: R16.1. `None` without LoRA, which is the common case and the reason the
+        #: adapter-slot check below costs one attribute test.
+        self.lora_config = vllm_config.lora_config
 
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
@@ -269,6 +272,22 @@ class Scheduler:
         # A separate budget from the token budget (R5.2). Multimodal lands in M4;
         # the phase is named here so its position in the order is not lost.
 
+        # R16.1. Which adapters this step already has resident. Bounded by
+        # `max_loras`: admitting a request for a further adapter would need a slot
+        # that does not exist, so it waits -- a real source of queueing in a
+        # multi-tenant deployment, and invisible to anyone who did not model it.
+        scheduled_loras: set[int] = set()
+        if self.lora_config is not None:
+            scheduled_loras = {
+                request.lora_request.lora_int_id
+                for request in self.running
+                if request.lora_request is not None
+            }
+            assert len(scheduled_loras) <= self.lora_config.max_loras, (
+                f"{len(scheduled_loras)} adapters are resident but max_loras is "
+                f"{self.lora_config.max_loras} (R16.1)"
+            )
+
         # --- phase 3: admission from waiting ---------------------------------
         #
         # Skipped entirely if anything was preempted this step: the pool is already
@@ -290,6 +309,20 @@ class Scheduler:
                     break
 
                 request = self.waiting.peek_request()
+
+                # R16.1. No free adapter slot for this request's adapter. Set aside
+                # rather than breaking the loop: a request behind it may want an
+                # adapter that *is* resident, and stopping here would let one
+                # tenant's queue block every other tenant's.
+                if (
+                    self.lora_config is not None
+                    and request.lora_request is not None
+                    and len(scheduled_loras) >= self.lora_config.max_loras
+                    and request.lora_request.lora_int_id not in scheduled_loras
+                ):
+                    self.waiting.pop_request()
+                    self.skipped_waiting.add_request(request)
+                    continue
 
                 # R15. A request whose grammar is still compiling cannot be admitted:
                 # the first sampled token has to be constrained, and there is nothing
@@ -358,6 +391,8 @@ class Scheduler:
                     )
 
                 request.status = RequestStatus.RUNNING
+                if request.lora_request is not None:
+                    scheduled_loras.add(request.lora_request.lora_int_id)
                 request.num_computed_tokens = num_computed_tokens
                 request.num_cached_tokens = num_new_local_computed_tokens
                 req_to_new_blocks[request.request_id] = (

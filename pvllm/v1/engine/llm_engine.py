@@ -69,9 +69,14 @@ class LLMEngine:
         prompt: str | list[int],
         sampling_params: SamplingParams,
         priority: int = 0,
+        lora_request: Any = None,
     ) -> None:
         engine_request = self.input_processor.process_inputs(
-            request_id, prompt, sampling_params, priority=priority
+            request_id,
+            prompt,
+            sampling_params,
+            priority=priority,
+            lora_request=lora_request,
         )
         # The arrival time comes back from the core, which stamped it (R19.1).
         self.engine_core.add_request(engine_request)
