@@ -30,6 +30,7 @@ from pvllm.config import (
     StructuredOutputsConfig,
     VllmConfig,
 )
+from pvllm.config.kv_transfer import KVTransferConfig
 from pvllm.config.lora import LoRAConfig
 from pvllm.config.model import DEFAULT_MODEL
 from pvllm.config.speculative import SpeculativeConfig
@@ -191,10 +192,13 @@ class EngineArgs:
                 "is not inferred from the presence of a module."
             )
 
-        if self.kv_transfer_config is not None:
-            raise NotImplementedError(
-                "KV transfer and disaggregation (requirement R17) land in M4"
-            )
+        # R17. Built only when asked for; `None` is what keeps the connector path
+        # off the scheduler's hot loop entirely.
+        kv_transfer = (
+            KVTransferConfig(**self.kv_transfer_config)
+            if self.kv_transfer_config is not None
+            else None
+        )
 
         return VllmConfig(
             model_config=model_config,
@@ -208,6 +212,7 @@ class EngineArgs:
             structured_outputs_config=StructuredOutputsConfig(),
             lora_config=lora_config,
             speculative_config=self.speculative_config,
+            kv_transfer_config=kv_transfer,
         )
 
     # --- CLI -----------------------------------------------------------------

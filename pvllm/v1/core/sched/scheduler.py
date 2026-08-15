@@ -59,6 +59,17 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
+def _build_connector(vllm_config: VllmConfig) -> Any:
+    """The scheduler-side KV connector, or `None`. R17.1."""
+    transfer = vllm_config.kv_transfer_config
+    if transfer is None or transfer.kv_connector is None:
+        return None
+    from pvllm.distributed.kv_transfer.base import KVConnectorRole
+    from pvllm.distributed.kv_transfer.sim_connector import SimSharedStoreConnector
+
+    return SimSharedStoreConnector(vllm_config, KVConnectorRole.SCHEDULER)
+
+
 def _require_block_ids(blocks: KVCacheBlocks) -> tuple[list[int], ...]:
     """Block ids for a newly scheduled request, which must always have some.
 
@@ -160,6 +171,10 @@ class Scheduler:
         self.max_num_encoder_input_tokens = (
             self.scheduler_config.max_num_encoder_input_tokens
         )
+        # R17.1. The scheduler half of the KV connector, or `None`. Built here
+        # because deciding what to load is a scheduling decision -- the worker half
+        # lives in the worker and never calls this one.
+        self.connector = _build_connector(vllm_config)
         #: R14. Rejected drafts from the last step, per request, for the metrics.
         self.last_num_invalid_spec_tokens: dict[str, int] = {}
         #: R14. Cumulative draft counters, for `vllm:spec_decode_*`.
@@ -408,12 +423,25 @@ class Scheduler:
                     self.skipped_waiting.add_request(request)
                     continue
 
+                # R17.1. What an external store holds beyond the local cache.
+                # Asked before allocation, because the blocks the KV manager hands
+                # out have to cover the tokens about to be pulled into them.
                 # R6.4. On the real path, so admission accounting is identical
                 # whether or not the cache is enabled.
                 new_computed_blocks, num_new_local_computed_tokens = (
                     self.kv_cache_manager.get_computed_blocks(request)
                 )
                 num_computed_tokens = num_new_local_computed_tokens
+
+                # R17.1. What an external store holds beyond the local cache.
+                # Asked *after* the local lookup, because pulling KV the engine
+                # already has in memory would be strictly worse than using it.
+                num_external_tokens = 0
+                if self.connector is not None:
+                    num_external_tokens, _ = self.connector.get_num_new_matched_tokens(
+                        request, num_computed_tokens
+                    )
+                    num_computed_tokens += num_external_tokens
 
                 num_new_tokens = request.num_tokens - num_computed_tokens
                 # R5.4: cap any single request's share of the step, so one very long
@@ -436,7 +464,15 @@ class Scheduler:
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
-                    num_new_computed_tokens=num_new_local_computed_tokens,
+                    # R17.1. The externally-held tokens count as *computed* -- the
+                    # request will not run them -- but blocks still have to exist to
+                    # receive them, so they are included here. Advancing
+                    # `num_computed_tokens` without this allocates nothing for the
+                    # pulled KV, and the slot-mapping oracle catches it as a write
+                    # past the end of the block table (R8.3).
+                    num_new_computed_tokens=(
+                        num_new_local_computed_tokens + num_external_tokens
+                    ),
                     new_computed_blocks=new_computed_blocks,
                 )
                 if new_blocks is None:
@@ -471,6 +507,15 @@ class Scheduler:
                     raise RuntimeError(
                         f"request {request.request_id} was admitted from the waiting "
                         f"queue with unexpected status {request.status}"
+                    )
+
+                if self.connector is not None and num_external_tokens:
+                    # The blocks are allocated; tell the connector which ones this
+                    # step must fill from the store before the model reads them.
+                    self.connector.update_state_after_alloc(
+                        request,
+                        self.kv_cache_manager.get_blocks(request.request_id),
+                        num_external_tokens,
                     )
 
                 request.status = RequestStatus.RUNNING
@@ -552,6 +597,11 @@ class Scheduler:
             structured_output_request_ids=structured_output_request_ids,
             finished_req_ids=self.finished_req_ids,
             free_encoder_mm_hashes=self.encoder_cache_manager.get_freed_mm_hashes(),
+            kv_connector_metadata=(
+                self.connector.build_connector_meta(None)
+                if self.connector is not None
+                else None
+            ),
             preempted_req_ids={r.request_id for r in preempted_reqs} or None,
         )
 
@@ -784,6 +834,13 @@ class Scheduler:
             self._free_request(request)
 
     def _free_request(self, request: Request) -> None:
+        # R17.1. Offered to the connector before the blocks go back, which is the
+        # only moment its KV is both complete and still resident.
+        if self.connector is not None:
+            blocks = self.kv_cache_manager.get_blocks(request.request_id)
+            block_ids = blocks.get_block_ids()
+            self.connector.request_finished(request, block_ids or ())
+
         # R18.1. Dropped, not evicted: the embeddings stay resident so the next
         # request with the same image still hits.
         if request.mm_features:

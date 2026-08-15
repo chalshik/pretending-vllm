@@ -14,8 +14,9 @@ See [UPSTREAM.md](UPSTREAM.md).
 > `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, the debug surface (JSONL
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
-> parallelism, speculative decoding, sliding-window attention, and multimodal all work. KV
-> connectors and mixed full/windowed models are not implemented and refuse by name.
+> parallelism, speculative decoding, sliding-window attention, multimodal, and KV
+> disaggregation all work. **M4 is complete.** Mixed full/windowed models, data and expert
+> parallelism, and real KV transports are not implemented and refuse by name.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -162,6 +163,7 @@ observable rather than approximated.
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
 | an `image_url` content part | 256 placeholder tokens, a separate encoder budget, and an encoder cache the second request with the same image hits |
+| a KV connector | a second engine pulls a published prefix instead of recomputing it; whether that wins is your store's bandwidth against the cost model's prefill time |
 | `--enable-lora` + prefix caching | adapter id partitions the cache, so two tenants with the same prompt do not share blocks |
 
 Two of these carry a knob a simulator cannot derive from anything, because it depends on a model

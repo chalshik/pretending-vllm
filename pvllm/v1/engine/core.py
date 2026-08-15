@@ -84,6 +84,8 @@ class EngineCore:
             trace=self.trace,
         )
         self.kv_cache_config = kv_cache_config
+        if self.scheduler.connector is not None:
+            self.scheduler.connector.set_block_bytes(self._kv_page_size)
 
         # R15. Owned here rather than by the scheduler: it compiles on a thread
         # pool and holds a tokenizer, neither of which belongs to a component whose
@@ -152,6 +154,11 @@ class EngineCore:
         )
         self.executor.initialize_from_config([kv_cache_config])
         self.executor.compile_or_warm_up_model()
+        # R17.1. The connector cannot cost a transfer until the KV layout is known.
+        # Stashed rather than pushed, because the scheduler that owns the connector
+        # is built *after* this runs -- the KV layout is one of its constructor
+        # arguments.
+        self._kv_page_size = page_size
         return kv_cache_config
 
     # --- request lifecycle ---------------------------------------------------
@@ -200,6 +207,7 @@ class EngineCore:
         planned = self._plan_step()
         if planned is None:
             return {}, False
+        self._transfer_kv(planned)
         return self._finish_step(planned, self.executor.execute_model(planned))
 
     async def step_async(self) -> tuple[dict[int, EngineCoreOutputs], bool]:
@@ -212,6 +220,7 @@ class EngineCore:
         planned = self._plan_step()
         if planned is None:
             return {}, False
+        self._transfer_kv(planned)
         return self._finish_step(
             planned, await self.executor.execute_model_async(planned)
         )
@@ -242,6 +251,23 @@ class EngineCore:
                 )
             )
         return scheduler_output
+
+    def _transfer_kv(self, scheduler_output: SchedulerOutput) -> None:
+        """Pull this step's externally-held KV in, and charge the time. R17.
+
+        Before the model runs, because the KV has to be resident for the step that
+        reads it. The duration comes from the store's modeled bandwidth and latency
+        and is spent on the engine's clock -- which is what makes disaggregation's
+        cost visible next to the prefill it replaced.
+        """
+        connector = self.scheduler.connector
+        metadata = scheduler_output.kv_connector_metadata
+        if connector is None or not metadata:
+            return
+        seconds = connector.start_load_kv(metadata)
+        seconds += connector.wait_for_save(metadata)
+        if seconds > 0.0:
+            self.clock.advance(seconds)
 
     def _finish_grammar_failures(self) -> dict[int, list[EngineCoreOutput]]:
         """End requests whose grammar could not compile. R15.
