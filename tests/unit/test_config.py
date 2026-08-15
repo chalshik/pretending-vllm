@@ -110,9 +110,8 @@ def test_invalid_values_are_rejected(factory, match):
 @pytest.mark.parametrize(
     ("factory", "match"),
     [
-        (lambda: ParallelConfig(tensor_parallel_size=2), "tensor parallelism"),
-        (lambda: ParallelConfig(pipeline_parallel_size=2), "pipeline parallelism"),
         (lambda: ParallelConfig(data_parallel_size=2), "data parallel"),
+        (lambda: ParallelConfig(enable_expert_parallel=True), "expert parallelism"),
         (lambda: CacheConfig(sliding_window=4096), "sliding-window"),
         (lambda: SchedulerConfig(async_scheduling=True), "async scheduling"),
     ],
@@ -126,6 +125,14 @@ def test_deferred_subsystems_refuse_rather_than_silently_degrade(factory, match)
     """
     with pytest.raises(NotImplementedError, match=match):
         factory()
+
+
+def test_tensor_and_pipeline_parallelism_are_accepted():
+    """R13.1/R13.2. Both shard per-device memory and both are modeled, so they are
+    accepted rather than refused -- the refusal existed only while accepting them
+    would have reported single-device capacity."""
+    config = ParallelConfig(tensor_parallel_size=4, pipeline_parallel_size=2)
+    assert config.world_size == 8
 
 
 def test_engine_args_round_trip_through_the_cli():

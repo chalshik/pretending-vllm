@@ -188,17 +188,33 @@ class RooflineCostModel(CostModel):
 
         self.dtype_bytes = DTYPE_BYTES[dtype]
         self.peak_flops = device.peak_flops_for(dtype)
-        self.layers_local = model.num_hidden_layers // pp_size
         self.heads_local = max(1, model.num_attention_heads // tp_size)
         self.kv_bytes_per_token = model.kv_bytes_per_token(kv_cache_dtype, tp_size)
 
+        # **Pipeline parallelism shards memory, not step latency.** Each stage holds
+        # `num_layers / pp` layers, so per-device memory divides -- but a batch still
+        # traverses every stage before a token comes out, so the step costs the whole
+        # model's work either way. Dividing the compute and memory terms by `pp_size`
+        # (as an earlier version did) would report a step `pp_size` times faster than
+        # it is.
+        #
+        # What that leaves unmodeled is the *throughput* gain: real pipeline
+        # parallelism overlaps microbatches so the steady state approaches one
+        # stage's time. There are no virtual engines here, so PP shows up as "same
+        # latency, less memory per device" -- correct for a single request and
+        # pessimistic for a saturated one.
+        self.layers_local = model.num_hidden_layers
+        self.layers_per_stage = max(1, model.num_hidden_layers // pp_size)
+
         from pvllm.sim.memory import compute_weight_bytes
 
-        self.weight_bytes_local = compute_weight_bytes(model, dtype, tp_size) // pp_size
+        # Every stage's weights are read once per step, so the traffic for a full
+        # traversal is the whole (TP-sharded) weight set regardless of `pp_size`.
+        self.weight_bytes_local = compute_weight_bytes(model, dtype, tp_size)
         # MoE reads only the routed experts per token, so the *active* count is what
         # the compute term uses -- which is why an MoE is far cheaper to run than its
         # parameter count suggests.
-        self.active_params_local = model.num_active_parameters // (tp_size * pp_size)
+        self.active_params_local = model.num_active_parameters // tp_size
 
     def step_cost(
         self, profile: StepProfile, rng: np.random.Generator | None = None
@@ -234,18 +250,23 @@ class RooflineCostModel(CostModel):
         # Two all-reduces per layer under tensor parallelism, each moving a
         # hidden-sized activation per token. Zero at TP=1.
         t_comm = 0.0
+        link = self.device.link_eff * self.device.interconnect_bandwidth
         if self.tp_size > 1:
             volume = 2.0 * tokens * self.model.hidden_size * self.dtype_bytes
-            t_comm = (
-                volume
-                / (self.device.link_eff * self.device.interconnect_bandwidth)
-                * self.layers_local
+            t_comm = volume / link * self.layers_local
+        if self.pp_size > 1:
+            # One activation hand-off per stage boundary, hidden-sized per token.
+            # Far cheaper than tensor parallelism's per-layer all-reduces, which is
+            # the whole reason pipeline parallelism is what crosses slow links.
+            handoffs = self.pp_size - 1
+            t_comm += (
+                handoffs * tokens * self.model.hidden_size * self.dtype_bytes / link
             )
 
         # --- launch overhead -------------------------------------------------
         graph_hit = profile.is_graph_hit and not self.enforce_eager
         num_kernels = (
-            KERNELS_PER_STEP_CAPTURED
+            KERNELS_PER_STEP_CAPTURED * self.pp_size
             if graph_hit
             else KERNELS_PER_LAYER_EAGER * self.layers_local
         )

@@ -44,22 +44,22 @@ class ParallelConfig:
 
         self.world_size = self.pipeline_parallel_size * self.tensor_parallel_size
 
-        # Sharding changes per-device memory and the cost model's inputs, so
-        # pretending it works would silently produce wrong capacity answers -- the
-        # exact failure mode this project exists to avoid.
-        if self.tensor_parallel_size > 1:
-            raise NotImplementedError(
-                "tensor parallelism (requirement R13.1) lands in M4. Until then a "
-                "tensor_parallel_size above 1 would report single-device memory and "
-                "step time, which is worse than refusing."
-            )
-        if self.pipeline_parallel_size > 1:
-            raise NotImplementedError(
-                "pipeline parallelism (requirement R13.2) lands in M4"
-            )
+        # R13.1/R13.2. Sharding changes per-device memory and the cost model's
+        # inputs, both of which are modeled -- see `pvllm/sim/memory.py` and
+        # `RooflineCostModel`. What is *not* modeled is the throughput gain
+        # pipeline parallelism gets from overlapping microbatches, because there
+        # are no virtual engines here; see the note in `RooflineCostModel`.
         if self.data_parallel_size > 1:
             raise NotImplementedError(
-                "data parallel replicas (requirement R13.3) land in M4"
+                "data parallel replicas (requirement R13.3) are independent engines "
+                "sharing a router, not a sharded one. Run `data_parallel_size` "
+                "separate pretending-vllm instances and put your own load balancer "
+                "in front -- that is what the deployment does, and simulating the "
+                "router here would tell you about the router rather than the engine."
             )
         if self.enable_expert_parallel:
-            raise NotImplementedError("expert parallelism lands in M4")
+            raise NotImplementedError(
+                "expert parallelism shards MoE experts across devices, which changes "
+                "the active-parameter count per device in a way the cost model does "
+                "not express (requirement R13.4)"
+            )

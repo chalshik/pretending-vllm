@@ -190,6 +190,12 @@ def compute_memory_profile(
     capacity = device.memory_bytes
     usable = int(capacity * gpu_memory_utilization)
 
+    # Pipeline stages are treated as equal shares, which they are not: stage 0 also
+    # holds the embedding table and the last holds the lm_head, and on a large-vocab
+    # model those are over a gigabyte. So this understates the end stages and
+    # overstates the middle ones. The error is bounded by the embedding size and
+    # shrinks as `pp_size` falls; a capacity plan for a 128k-vocab model at high
+    # `pp_size` should treat the end stages as tighter than reported.
     weight_bytes = compute_weight_bytes(model, dtype, tp_size) // pp_size
     activation_peak = compute_activation_peak_bytes(
         model, dtype, max_num_batched_tokens, max_num_seqs, tp_size
