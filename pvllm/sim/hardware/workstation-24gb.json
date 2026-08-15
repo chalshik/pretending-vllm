@@ -1,0 +1,18 @@
+{
+  "name": "workstation-24gb",
+  "memory_bytes": 25769803776,
+  "memory_bandwidth": 1008000000000,
+  "peak_flops": {
+    "bfloat16": 165200000000000,
+    "float16": 165200000000000,
+    "float32": 82600000000000
+  },
+  "interconnect_bandwidth": 25000000000,
+  "launch_overhead": 0.000006,
+  "load_bandwidth": 1500000000,
+  "num_devices": 1,
+  "mfu": 0.35,
+  "bw_eff": 0.75,
+  "link_eff": 0.5,
+  "provenance": "Uncalibrated approximation of a high-end workstation GPU class (24 GB GDDR6X, ~1 TB/s, ~165 TFLOPS dense BF16). Vendor peaks for the class, not measurements. Lower mfu than the datacenter card reflects that consumer parts are typically further from peak on long-context attention. Replace via tools/calibrate_cost_model.py."
+}

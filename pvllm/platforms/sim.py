@@ -1,0 +1,118 @@
+"""The simulated platform.
+
+Upstream: vllm/platforms/cuda.py (counterpart, not a port)
+Tier: D
+
+This is the hinge. `check_and_update_config` fills in `worker_cls` from `"auto"`,
+which is how a simulated worker gets in front of a real scheduler without any code
+above the boundary knowing (B1). `CudaPlatform` does exactly the same thing with
+`"vllm.v1.worker.gpu_worker.Worker"`.
+
+Device facts (name, memory, count) come from the hardware card named by `SimConfig`,
+not from probing hardware. That is the whole point: hardware becomes a JSON file, and
+"does 70B at 128k context fit at gpu_memory_utilization 0.92 on eight devices" is
+answerable without owning the hardware.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar
+
+from pvllm.logger import init_logger
+from pvllm.platforms.interface import Platform, PlatformEnum
+
+if TYPE_CHECKING:
+    from pvllm.config import VllmConfig
+
+logger = init_logger(__name__)
+
+
+class SimPlatform(Platform):
+    """A device that does not exist, described by a JSON card."""
+
+    _enum = PlatformEnum.OOT
+    device_name: str = "sim"
+    device_type: str = "sim"
+    dist_backend: str = "sim"
+
+    device_control_env_var: str = "PVLLM_VISIBLE_DEVICES"
+
+    # No quantization is modeled yet; dtype affects memory and the cost model only.
+    supported_dtypes: ClassVar[list[str]] = ["bfloat16", "float16", "float32"]
+
+    @classmethod
+    def get_device_name(cls, device_id: int = 0) -> str:
+        from pvllm.sim.hardware_db import get_active_device_card
+
+        return get_active_device_card().name
+
+    @classmethod
+    def get_device_total_memory(cls, device_id: int = 0) -> int:
+        from pvllm.sim.hardware_db import get_active_device_card
+
+        return get_active_device_card().memory_bytes
+
+    @classmethod
+    def get_device_count(cls) -> int:
+        from pvllm.sim.hardware_db import get_active_device_card
+
+        return get_active_device_card().num_devices
+
+    @classmethod
+    def is_async_output_supported(cls, enforce_eager: bool | None) -> bool:
+        return True
+
+    @classmethod
+    def check_and_update_config(cls, vllm_config: VllmConfig) -> None:
+        parallel_config = vllm_config.parallel_config
+
+        if parallel_config.worker_cls == "auto":
+            parallel_config.worker_cls = "pvllm.v1.worker.sim_worker.Worker"
+
+        # F1/D6: upstream defaults to the V2 model runner for dense generate models,
+        # and pretending-vllm mirrors only the V2 shape. Setting the flag to 0 asks
+        # for a runner that does not exist here, so say so rather than silently
+        # running V2 and reporting V1.
+        if vllm_config.use_v2_model_runner is False:
+            raise NotImplementedError(
+                "PVLLM_USE_V2_MODEL_RUNNER=0 requests the legacy V1 model runner "
+                "(vllm/v1/worker/gpu_model_runner.py). pretending-vllm mirrors the "
+                "V2 runner (vllm/v1/worker/gpu/model_runner.py), which is upstream's "
+                "default at the pinned version. See D6 in UPSTREAM.md."
+            )
+
+    @classmethod
+    def get_attn_backend_cls(
+        cls,
+        selected_backend: str | None,
+        head_size: int,
+        dtype: str,
+        kv_cache_dtype: str | None,
+        block_size: int,
+        use_mla: bool,
+        has_sink: bool,
+    ) -> str:
+        if use_mla:
+            raise NotImplementedError(
+                "MLA attention (DeepSeek-style) is not modeled; it changes the KV "
+                "cache shape and therefore the memory model (requirement R6.7, M4)"
+            )
+        if selected_backend not in (None, "SIM", "SIM_ATTN"):
+            raise NotImplementedError(
+                f"attention backend {selected_backend!r} has no simulated "
+                f"counterpart; the simulator provides SIM_ATTN only"
+            )
+        return "pvllm.v1.attention.backends.sim_attn.SimAttentionBackend"
+
+    @classmethod
+    def get_device_communicator_cls(cls) -> str:
+        return "pvllm.distributed.sim_communicator.SimCommunicator"
+
+
+def sim_platform_plugin() -> str | None:
+    """Builtin platform plugin hook.
+
+    Always activates: there is no hardware to detect, which is exactly why this
+    package runs anywhere (NF3).
+    """
+    return "pvllm.platforms.sim.SimPlatform"

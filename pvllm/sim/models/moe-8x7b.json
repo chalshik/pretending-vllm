@@ -1,0 +1,17 @@
+{
+  "name": "moe-8x7b",
+  "num_hidden_layers": 32,
+  "hidden_size": 4096,
+  "num_attention_heads": 32,
+  "num_key_value_heads": 8,
+  "head_dim": 128,
+  "intermediate_size": 14336,
+  "vocab_size": 32000,
+  "max_position_embeddings": 32768,
+  "dtype": "bfloat16",
+  "architecture": "MixtralForCausalLM",
+  "tie_word_embeddings": false,
+  "num_experts": 8,
+  "num_experts_per_token": 2,
+  "provenance": "Representative of a sparse MoE decoder (Mixtral-8x7B class). Dimensions approximate that architecture family. Present mainly so the gap between total and active parameters is exercised: total drives memory, active drives compute."
+}

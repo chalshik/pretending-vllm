@@ -1,0 +1,27 @@
+# The vendored upstream reference tree is ~36 MB of third-party source. It is
+# reproducible via `python tools/fetch_upstream.py` and verified against the
+# committed vendor/MANIFEST.sha256, so it does not belong in git history.
+/vendor/*
+!/vendor/MANIFEST.sha256
+
+# Traces and run artifacts
+*.jsonl
+/traces/
+/runs/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+.DS_Store

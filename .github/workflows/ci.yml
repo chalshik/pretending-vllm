@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # NF3: no device to detect, so the suite must pass everywhere.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install
+        run: uv sync --extra dev --python ${{ matrix.python-version }}
+
+      # The vendored upstream tree is the reference spec_sync checks against.
+      # Cached by tag: the pin is immutable, so a hit is always valid.
+      - name: Cache vendored upstream
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: vendor-vllm-v0.27.1
+
+      - name: Fetch upstream reference tree
+        run: uv run python tools/fetch_upstream.py
+
+      - name: Verify vendored tree matches manifest
+        run: uv run python tools/fetch_upstream.py --check
+
+      # G2: fails when a declared upstream counterpart was renamed or removed at
+      # the pin. This is what keeps the port from rotting silently.
+      - name: Upstream drift check
+        run: uv run python tools/spec_sync.py
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Types
+        run: uv run mypy pvllm
+
+      # R21.5: the whole suite must stay under 30s on a laptop.
+      - name: Test
+        run: uv run pytest -q --durations=10

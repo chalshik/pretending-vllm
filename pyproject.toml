@@ -1,0 +1,99 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pretending-vllm"
+version = "0.0.1"
+description = "A structurally faithful reimplementation of the vLLM V1 engine with a simulated device and model"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Nurmukhammed Kalmamatov" }]
+keywords = ["vllm", "llm", "simulator", "inference", "test-double"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Testing",
+]
+
+# NF1, amended per F10: numpy is REQUIRED, not optional. The V1 engine's real
+# input-preparation logic is the numpy path -- upstream computes query_start_loc,
+# idx_mapping, and is_prefilling in numpy and only mirrors the result to device.
+# pretending-vllm keeps that half verbatim, so numpy is load-bearing.
+#
+# Deliberately absent, and enforced by tests/unit/test_purity.py: torch, CUDA,
+# transformers. There is no device to detect (NF3).
+dependencies = [
+  "msgspec>=0.18",
+  "pyzmq>=25",
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "pydantic>=2.6",
+  "prometheus-client>=0.20",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+# A real Hugging Face tokenizer. Mandatory for conformance class C3, since prefix
+# cache hit rates on real text depend on exact tokenization (D3).
+realtok = ["tokenizers>=0.19"]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  "hypothesis>=6.100",
+  "httpx>=0.27",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+pvllm = "pvllm.entrypoints.cli.main:main"
+
+[project.urls]
+Repository = "https://github.com/chalshik/pretending-vllm"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pvllm"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = [
+  "E501",    # line length is handled by the formatter
+  "B008",    # FastAPI's Depends() in defaults is idiomatic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]
+
+[tool.mypy]
+# No python_version pin: mypy checks against the running interpreter. Pinning to
+# 3.11 makes it reject numpy's own stubs, which use 3.12+ `type` statements.
+strict = true
+warn_unreachable = true
+exclude = ["vendor/"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+# `pvllm.config` lands in M1. Until then the platform seam forward-references
+# VllmConfig under TYPE_CHECKING so the signature matches upstream's. Delete this
+# override when pvllm/config/ exists.
+[[tool.mypy.overrides]]
+module = ["pvllm.config", "pvllm.config.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+# R21.1 turns invariant assertions on for the whole suite; see tests/conftest.py.

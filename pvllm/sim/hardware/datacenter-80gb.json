@@ -1,0 +1,18 @@
+{
+  "name": "datacenter-80gb",
+  "memory_bytes": 85899345920,
+  "memory_bandwidth": 3350000000000,
+  "peak_flops": {
+    "bfloat16": 494700000000000,
+    "float16": 494700000000000,
+    "float32": 61300000000000
+  },
+  "interconnect_bandwidth": 450000000000,
+  "launch_overhead": 0.0000045,
+  "load_bandwidth": 2000000000,
+  "num_devices": 1,
+  "mfu": 0.45,
+  "bw_eff": 0.8,
+  "link_eff": 0.75,
+  "provenance": "Uncalibrated approximation of a current datacenter accelerator class (80 GB HBM3, ~3.35 TB/s, ~495 TFLOPS dense BF16). Figures are published vendor peaks for the device class, NOT measurements, and dense rather than sparsity-doubled. The mfu/bw_eff/link_eff factors are rules of thumb, not fits. Replace via tools/calibrate_cost_model.py."
+}
