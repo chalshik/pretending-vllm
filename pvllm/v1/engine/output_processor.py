@@ -111,6 +111,9 @@ class OutputProcessor:
         self.tokenizer = tokenizer
         self.log_stats = log_stats
         self.request_states: dict[str, RequestState] = {}
+        #: Requests the frontend ended on a stop string. The scheduler cannot see
+        #: those -- it has no text -- so the core must be told to abort them.
+        self.stopped_by_string: list[str] = []
 
     def add_request(
         self,
@@ -163,8 +166,10 @@ class OutputProcessor:
             )
             if stop_string is not None and finish_reason is None:
                 # R11.5: a stop *string* ends the request here, in the frontend --
-                # the scheduler cannot see it, because it has no text.
+                # the scheduler cannot see it, because it has no text. Recorded so
+                # the caller aborts exactly these, and not every finished request.
                 finish_reason = FinishReason.STOP
+                self.stopped_by_string.append(engine_output.request_id)
 
             finished = finish_reason is not None
             state.num_cached_tokens = engine_output.num_cached_tokens
@@ -219,17 +224,15 @@ class OutputProcessor:
 
         return outputs
 
-    def get_stop_string_request_ids(self) -> list[str]:
-        """Requests the frontend stopped that the engine core still thinks are live.
+    def take_stopped_by_string(self) -> list[str]:
+        """Drain the requests the frontend ended on a stop string.
 
-        A stop string is invisible to the scheduler, so the core has to be told to
-        abort them -- otherwise they keep generating and holding blocks.
+        The engine core still believes these are running, so it must be told to
+        abort them -- otherwise they keep generating and holding blocks. Taken
+        rather than read so a request is aborted once.
         """
-        return [
-            request_id
-            for request_id, state in self.request_states.items()
-            if state.is_finished
-        ]
+        stopped, self.stopped_by_string = self.stopped_by_string, []
+        return stopped
 
     @property
     def num_requests(self) -> int:

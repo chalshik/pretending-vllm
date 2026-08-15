@@ -37,7 +37,9 @@ class BlockTables:
         max_num_reqs: int,
         max_model_len: int,
         max_num_batched_tokens: int,
+        enable_caching: bool = False,
     ) -> None:
+        self.enable_caching = enable_caching
         self.block_sizes = block_sizes
         self.num_kv_cache_groups = len(block_sizes)
         self.max_num_reqs = max_num_reqs
@@ -189,6 +191,9 @@ class BlockTables:
         the strongest statement the worker can make alone, and it happens to be the
         one that catches the bug that matters.
         """
+        # Two requests writing the same slot in one step is a bug in every
+        # configuration: even a shared prefix block is *read* by the second request,
+        # never rewritten, so its positions are not scheduled.
         seen_slots: dict[int, int] = {}
         for batch_idx, req_idx in enumerate(req_indices):
             start = int(query_start_loc[batch_idx])
@@ -205,7 +210,14 @@ class BlockTables:
                     )
                 seen_slots[slot] = int(req_idx)
 
-        self.validate_block_ownership(group_id)
+        # Cross-request block ownership is only exclusive when prefix caching is
+        # off. With caching on, two requests sharing a prefix legitimately hold the
+        # same blocks -- that is the entire mechanism -- and the worker cannot tell
+        # legitimate sharing from double-allocation, because reference counts live
+        # in the pool, not in the block table. The pool's own invariants
+        # (BlockPool._check_invariants) cover that case instead.
+        if not self.enable_caching:
+            self.validate_block_ownership(group_id)
 
     def validate_block_ownership(self, group_id: int = 0) -> None:
         """No physical block may appear in two live requests' tables. R8.3.
@@ -214,6 +226,10 @@ class BlockTables:
         pool can hand a block to two requests that are never scheduled together --
         and the resulting corruption would then surface only much later, on the step
         they finally collide.
+
+        **Only sound with prefix caching disabled.** Sharing a cached prefix means
+        two requests holding the same blocks on purpose. Callers should not invoke
+        this when caching is on; `compute_slot_mapping` does not.
         """
         owner_of_block: dict[int, int] = {}
         for req_idx in range(self.max_num_reqs):

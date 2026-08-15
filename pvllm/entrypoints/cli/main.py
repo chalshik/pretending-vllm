@@ -35,6 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_serve_args(subparsers.add_parser("serve", help="run the OpenAI API server"))
 
+    trace = subparsers.add_parser("trace", help="inspect a recorded trace")
+    trace_sub = trace.add_subparsers(dest="trace_command", required=True)
+    view = trace_sub.add_parser("view", help="render a step timeline")
+    view.add_argument("path", help="path to a JSONL trace")
+    view.add_argument("--format", default="text", choices=["text", "svg"])
+    view.add_argument("--width", type=int, default=100, help="text columns")
+    view.add_argument("-o", "--output", default=None, help="write to a file")
+
     for name, requirement in (
         ("bench", "R20, benchmarks"),
         ("complete", "R2.6, interactive completion"),
@@ -54,6 +62,24 @@ def main(argv: list[str] | None = None) -> int:
         from pvllm.entrypoints.cli.serve import run_serve
 
         run_serve(args)
+        return 0
+
+    if args.command == "trace":
+        from pvllm.trace_viewer import render_svg, render_text, summarize
+
+        summary = summarize(args.path)
+        rendered = (
+            render_svg(summary)
+            if args.format == "svg"
+            else render_text(summary, width=args.width)
+        )
+        if args.output:
+            from pathlib import Path
+
+            Path(args.output).write_text(rendered)
+            print(f"wrote {args.output}", file=sys.stderr)
+        else:
+            print(rendered)
         return 0
 
     print(

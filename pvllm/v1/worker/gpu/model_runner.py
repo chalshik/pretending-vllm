@@ -94,6 +94,7 @@ class SimModelRunner:
             max_num_reqs=self.max_num_reqs,
             max_model_len=self.max_model_len,
             max_num_batched_tokens=self.max_num_batched_tokens,
+            enable_caching=self.vllm_config.cache_config.enable_prefix_caching,
         )
 
     def capture_model(self) -> float:

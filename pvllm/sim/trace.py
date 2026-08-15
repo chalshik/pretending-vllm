@@ -26,21 +26,27 @@ knows records were dropped rather than that behavior changed.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from types import TracebackType
 from typing import Any, BinaryIO
 
 import msgspec
 
-from pvllm.tracing import TraceSink as TraceSink  # re-exported for convenience
-
-#: Bump when a field's meaning changes or a field is removed. Adding a field is
-#: backward compatible and does not require a bump; readers must ignore unknown keys.
-TRACE_SCHEMA_VERSION = 1
+from pvllm.tracing import (
+    TRACE_SCHEMA_VERSION as TRACE_SCHEMA_VERSION,
+)
+from pvllm.tracing import (
+    TraceSink as TraceSink,
+)
+from pvllm.tracing import (
+    read_header as read_header,
+)
+from pvllm.tracing import (
+    read_trace as read_trace,
+)
 
 _encoder = msgspec.json.Encoder()
-_decoder = msgspec.json.Decoder()
 
 
 class NullTraceWriter:
@@ -175,40 +181,3 @@ class TraceWriter:
         tb: TracebackType | None,
     ) -> None:
         self.close()
-
-
-def read_trace(path: str | os.PathLike[str]) -> Iterator[dict[str, Any]]:
-    """Yield records from a JSONL trace.
-
-    Used by the conformance suite and the trace viewer. Validates ``seq`` continuity,
-    because a gap means records were lost -- which would otherwise read as a
-    behavioral difference in a conformance diff.
-    """
-    expected = 0
-    with Path(path).open("rb") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            record = _decoder.decode(line)
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{lineno}: expected a JSON object")
-            seq = record.get("seq")
-            if seq != expected:
-                raise ValueError(
-                    f"{path}:{lineno}: trace discontinuity -- expected seq {expected}, "
-                    f"got {seq}. Records were dropped or the file was concatenated."
-                )
-            expected += 1
-            yield record
-
-
-def read_header(path: str | os.PathLike[str]) -> dict[str, Any]:
-    """Read just the header record of a trace."""
-    for record in read_trace(path):
-        if record.get("type") != "header":
-            raise ValueError(
-                f"{path}: first record is {record.get('type')!r}, not a header"
-            )
-        return record
-    raise ValueError(f"{path}: empty trace")

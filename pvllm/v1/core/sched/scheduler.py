@@ -123,6 +123,8 @@ class Scheduler:
 
         self.step_index = 0
         self.num_preemptions_total = 0
+        #: Built by `_trace_step`, emitted by the engine core once stamped.
+        self.pending_step_record: dict[str, Any] | None = None
 
     # --- admission -----------------------------------------------------------
 
@@ -576,25 +578,40 @@ class Scheduler:
     def _trace_step(
         self, scheduler_output: SchedulerOutput, preempted: list[Request]
     ) -> None:
-        """One record per engine step. R5.10, R19.3."""
+        """Build one step's trace record. R5.10, R19.3.
+
+        Built here but *emitted* by the engine core, which stamps it. The scheduler
+        has no clock to read (R19.1), and a record without a timestamp is useless
+        for the thing traces exist for.
+        """
         self.step_index += 1
         if self._trace is None:
+            self.pending_step_record = None
             return
 
         record: dict[str, Any] = scheduler_output.to_trace_dict()
+        cache_stats = self.kv_cache_manager.make_prefix_cache_stats()
         record.update(
             step=self.step_index,
             num_running=len(self.running),
             num_waiting=len(self.waiting),
             kv_usage=round(self.kv_cache_manager.usage, 6),
             num_preemptions_total=self.num_preemptions_total,
+            prefix_cache_hits=cache_stats.hits,
+            prefix_cache_queries=cache_stats.queries,
+            # Sorted, and ids rather than just a count: a request starving behind a
+            # long prefill is the thing a timeline is opened to find, and a count
+            # cannot show *which* request waited.
+            waiting_req_ids=sorted(r.request_id for r in self.waiting),
         )
         if preempted:
-            record["preempted_num_computed"] = {
-                r.request_id: r.num_preemptions for r in preempted
-            }
-        # `t` is filled in by the engine core, which owns the clock (R19.1).
-        self._trace.emit("step", **record)
+            record["preemptions"] = {r.request_id: r.num_preemptions for r in preempted}
+        self.pending_step_record = record
+
+    def take_step_record(self) -> dict[str, Any] | None:
+        """Hand the last step's record to the engine core for stamping."""
+        record, self.pending_step_record = self.pending_step_record, None
+        return record
 
     def make_stats(self) -> dict[str, Any]:
         """A snapshot for the metrics layer (R12.1)."""

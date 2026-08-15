@@ -171,7 +171,13 @@ class Worker:
             num_gpu_blocks_override=self.cache_config.num_gpu_blocks_override,
         )
         logger.info("%s", self.memory_profile.summary())
-        return self.memory_profile.kv_pool_bytes
+        # The *block count* is what the profile resolved -- including any
+        # num_gpu_blocks_override -- so report the bytes those blocks occupy rather
+        # than the raw pool size. Returning the pool size would let the engine core
+        # re-derive a different count and silently ignore the override.
+        return (
+            self.memory_profile.num_gpu_blocks * self.memory_profile.kv_bytes_per_block
+        )
 
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         return get_kv_cache_spec(self.vllm_config)

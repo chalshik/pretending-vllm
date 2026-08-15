@@ -101,15 +101,10 @@ class LLMEngine:
             )
         self.last_iteration_stats = iteration_stats
 
-        # R11.5: a stop *string* is invisible to the scheduler, so requests the
-        # frontend just ended have to be aborted in the core -- otherwise they keep
-        # generating and holding blocks.
-        stopped = [
-            output.request_id
-            for output in outputs
-            if output.finished
-            and output.request_id not in self.output_processor.request_states
-        ]
+        # R11.5: only requests the frontend ended on a stop string need aborting.
+        # A request the *scheduler* finished is already gone from its side, and
+        # aborting it would emit a spurious lifecycle event and redo the cleanup.
+        stopped = self.output_processor.take_stopped_by_string()
         if stopped:
             self.engine_core.abort_requests(stopped)
         return outputs

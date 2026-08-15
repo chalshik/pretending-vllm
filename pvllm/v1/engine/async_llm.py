@@ -100,20 +100,15 @@ class AsyncLLM:
                     request_outputs = self.output_processor.process_outputs(
                         client_outputs.outputs, now, self._pending_stats
                     )
-                    stopped_by_string: list[str] = []
                     for output in request_outputs:
                         queue = self._queues.get(output.request_id)
                         if queue is not None:
                             queue.put_nowait(output)
-                        if (
-                            output.finished
-                            and output.request_id
-                            not in self.output_processor.request_states
-                        ):
-                            stopped_by_string.append(output.request_id)
-                    # R11.5: stop strings are invisible to the scheduler.
-                    if stopped_by_string:
-                        self.engine_core.abort_requests(stopped_by_string)
+                    # R11.5: only stop-string terminations need aborting; the
+                    # scheduler already knows about the ones it ended itself.
+                    stopped = self.output_processor.take_stopped_by_string()
+                    if stopped:
+                        self.engine_core.abort_requests(stopped)
 
                 # Give the event loop a turn so streaming actually streams rather
                 # than delivering everything at the end.

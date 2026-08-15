@@ -188,6 +188,25 @@ class EngineCore:
         for outputs in engine_core_outputs.values():
             outputs.timestamp = timestamp
 
+        # R19.3: the scheduler builds the step record; only this object can date it.
+        step_record = self.scheduler.take_step_record()
+        if step_record is not None:
+            self.trace.emit("step", t=timestamp, **step_record)
+
+        # One record per request lifecycle transition, so a trace answers "when did
+        # this request finish, and why" without replaying the step stream.
+        for outputs in engine_core_outputs.values():
+            for output in outputs.outputs:
+                if output.finish_reason is not None:
+                    self.trace.emit(
+                        "request",
+                        t=timestamp,
+                        request_id=output.request_id,
+                        event="finished",
+                        finish_reason=str(output.finish_reason),
+                        num_cached_tokens=output.num_cached_tokens,
+                    )
+
         self.step_index += 1
         model_executed = scheduler_output.total_num_scheduled_tokens > 0
         return engine_core_outputs, model_executed
