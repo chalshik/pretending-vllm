@@ -10,9 +10,10 @@ GPU and no model weights.
 **Upstream pin: [vLLM v0.27.1](https://github.com/vllm-project/vllm/tree/v0.27.1)** (2026-08-11).
 See [UPSTREAM.md](UPSTREAM.md).
 
-> **Status: M1 complete, M2 in progress.** The OpenAI server, the offline `LLM` class, `AsyncLLM`,
-> `/metrics`, and prefix caching all work. Chunked prefill and per-request latency metrics are
-> landing; tensor parallelism, LoRA, and speculative decoding come in M4.
+> **Status: M1 and M2 complete, M3 in progress.** The OpenAI server, the offline `LLM` class,
+> `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, and the debug surface (JSONL
+> trace, timeline viewer, `/debug/*` endpoints) all work. The conformance suite and the benchmark
+> CLI are landing; tensor parallelism, LoRA, and speculative decoding come in M4.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -53,6 +54,54 @@ No code above the boundary knows it is talking to a simulator. There is no `if s
 in `v1/core`, `v1/engine`, or `entrypoints` — selection happens through the platform abstraction,
 exactly as an out-of-tree hardware backend is selected upstream.
 
+## Seeing what the engine is doing
+
+Three ways in, all of them structured — there is no verbose stdout narration to grep.
+
+**A JSONL trace** of every step and every request transition:
+
+```bash
+pvllm serve --model dense-0.6b --trace-path run.jsonl
+```
+
+**A timeline** rendered from that trace, as text or SVG:
+
+```bash
+pvllm trace view run.jsonl
+```
+
+```
+pretending-vllm trace  (upstream 0.27.1, seed 0, clock virtual)
+  model='dense-0.6b' device='workstation-24gb' block_size=16 cost_model='constant'
+
+  0  #====            length
+  1  :====            length
+  2  .....:====       length
+
+  steps=15  tokens=46  preemptions=0  peak_kv=28.6%
+  prefix cache: 64/90 tokens (71.1%)
+  legend: # prefill  : small prefill  = decode  . waiting  ! preempted  ^ resumed
+```
+
+**Live HTTP introspection**, for asking questions while a product is driving the engine:
+
+```bash
+pvllm serve --model dense-0.6b --enable-debug-endpoints
+```
+
+| endpoint | answers |
+|---|---|
+| `GET /debug/scheduler` | what is running, what is waiting, and in what order |
+| `GET /debug/requests` | every tracked request, counted by state |
+| `GET /debug/requests/{id}` | one request's state machine and block table |
+| `GET /debug/blocks` | the block pool, and which requests hold which blocks |
+| `GET /debug/prefix_cache` | hit rate overall, and per live request |
+| `GET /debug/cost_model` | the term-by-term breakdown of recent steps |
+| `GET /debug/config` | the fully resolved config, including what was *derived* |
+
+All read-only, all off by default — they expose prompt token ids, and the gate mirrors upstream's
+`VLLM_SERVER_DEV_MODE`. `/debug/cost_model` reports modeled durations; see the fidelity contract.
+
 ## Fidelity contract
 
 **Current state: `asserted`, not `verified`.** Golden traces captured from a real vLLM run at the
@@ -91,6 +140,12 @@ Treat latency output as *shape*, not truth. It will reproduce the qualitative re
 compute-bound and linear in tokens, decode memory-bound and nearly flat until KV traffic dominates,
 throughput saturating with batch size, TTFT rising under queueing — and it will not tell you what
 your p99 is going to be.
+
+One known bias: cascade attention is not modeled. The common-prefix block count is computed and
+carried through `SchedulerOutput` exactly as upstream does, and you can read it at
+`/debug/cost_model`, but the cost model ignores it. Shared-prefix workloads are therefore modeled
+*pessimistically* — a real backend taking the optimization would be faster than this says. Prefix
+caching itself, which is the much larger effect, is fully modeled.
 
 ## Non-goals
 

@@ -216,6 +216,42 @@ def test_no_simulator_branching_above_boundary() -> None:
     )
 
 
+def test_only_the_debug_router_reads_simulator_state() -> None:
+    """The one deliberate exception to B1, kept from spreading.
+
+    `entrypoints/serve/dev/introspect.py` traverses through the worker into the
+    simulator -- `device.recent_steps()`, the memory profile, the device card -- and
+    it has to, because a cost-model breakdown *is* simulator state and showing it is
+    the entire point of D9.
+
+    That is sound only while two things hold. The introspector makes no decisions, so
+    nothing the engine does can depend on it; and nothing else reaches for it, so the
+    exemption stays one module wide. The first is a property of the code (every
+    method returns a dict and mutates nothing). This test enforces the second.
+
+    The import-based B1 check above cannot catch attribute traversal, so without this
+    the next module to reach through `driver_worker.device` would pass silently.
+    """
+    allowed = "pvllm/entrypoints/serve/dev/"
+    violations: list[str] = []
+    for path in _python_files():
+        rel = path.relative_to(PACKAGE_ROOT.parent).as_posix()
+        if rel.startswith(allowed):
+            continue
+        for imported in _full_dotted_imports(_parse(path)):
+            if imported.startswith("pvllm.entrypoints.serve.dev"):
+                violations.append(f"{_relative(path)}: imports `{imported}`")
+
+    # api_server.py attaches the router, which is the sanctioned entry point.
+    violations = [v for v in violations if "api_server.py" not in v]
+
+    assert not violations, (
+        "A module outside the debug router imported the engine introspector. It "
+        "reads simulator state directly (the B1 exemption for D9) and must stay "
+        "confined to entrypoints/serve/dev/.\n  " + "\n  ".join(violations)
+    )
+
+
 @pytest.mark.parametrize("path", _python_files(), ids=_relative)
 def test_module_declares_upstream_and_tier(path: Path) -> None:
     """NF5: every module names its upstream counterpart and fidelity tier.

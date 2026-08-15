@@ -97,12 +97,18 @@ class ServerState:
 
 
 def build_app(
-    vllm_config: VllmConfig, registry: CollectorRegistry | None = None
+    vllm_config: VllmConfig,
+    registry: CollectorRegistry | None = None,
+    enable_debug_endpoints: bool = False,
 ) -> FastAPI:
     """Construct the ASGI app.
 
     Takes a resolved config rather than argv so tests can drive it in process, and
     an explicit registry so two apps in one process do not collide on metric names.
+
+    `enable_debug_endpoints` attaches the read-only `/debug/*` router (D9). Off by
+    default, mirroring upstream's `VLLM_SERVER_DEV_MODE` gate on its own `serve/dev/`
+    routers.
     """
     registry = registry if registry is not None else CollectorRegistry()
 
@@ -114,6 +120,14 @@ def build_app(
     app = FastAPI(title="pretending-vllm", version=__version__, lifespan=lifespan)
     state = ServerState(vllm_config, registry)
     app.state.server = state
+    app.state.vllm_config = vllm_config
+
+    if enable_debug_endpoints:
+        from pvllm.entrypoints.serve.dev.api_router import attach_router
+        from pvllm.entrypoints.serve.dev.introspect import EngineIntrospector
+
+        app.state.introspector = EngineIntrospector(state.engine)
+        attach_router(app)
 
     # --- OpenAI endpoints (R2.2) -----------------------------------------
 
@@ -198,5 +212,9 @@ def build_app(
     return app
 
 
-def build_app_from_args(args: AsyncEngineArgs) -> FastAPI:
-    return build_app(args.create_engine_config())
+def build_app_from_args(
+    args: AsyncEngineArgs, enable_debug_endpoints: bool = False
+) -> FastAPI:
+    return build_app(
+        args.create_engine_config(), enable_debug_endpoints=enable_debug_endpoints
+    )

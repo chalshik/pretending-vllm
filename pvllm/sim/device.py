@@ -17,7 +17,9 @@ the cost model, it becomes an explicit term in `RooflineCostModel`, not a fake s
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -49,11 +51,18 @@ class SimDevice:
     cost_model: CostModel
     rng: np.random.Generator | None = None
     device_id: int = 0
+    #: How many recent steps to keep for the debug surface (D9). Bounded, because a
+    #: long-running server would otherwise accumulate one record per step forever --
+    #: and a debug endpoint that leaks memory is worse than no debug endpoint.
+    history_size: int = 64
 
     def __post_init__(self) -> None:
         self.ledger = MemoryLedger(self.card.memory_bytes)
         self._last_step_cost: StepCost | None = None
         self._num_steps = 0
+        self._recent_steps: deque[tuple[int, StepProfile, StepCost]] = deque(
+            maxlen=self.history_size
+        )
 
     # --- memory --------------------------------------------------------------
 
@@ -90,8 +99,7 @@ class SimDevice:
         """
         cost = self.cost_model.step_cost(profile, self.rng)
         self.clock.advance(cost.duration)
-        self._last_step_cost = cost
-        self._num_steps += 1
+        self._record(profile, cost)
         return cost
 
     async def execute_async(self, profile: StepProfile) -> StepCost:
@@ -103,8 +111,7 @@ class SimDevice:
         """
         cost = self.cost_model.step_cost(profile, self.rng)
         await self.clock.advance_async(cost.duration)
-        self._last_step_cost = cost
-        self._num_steps += 1
+        self._record(profile, cost)
         return cost
 
     def load_weights(self, weight_bytes: int) -> float:
@@ -121,10 +128,38 @@ class SimDevice:
 
     # --- introspection -------------------------------------------------------
 
+    def _record(self, profile: StepProfile, cost: StepCost) -> None:
+        self._last_step_cost = cost
+        self._recent_steps.append((self._num_steps, profile, cost))
+        self._num_steps += 1
+
     @property
     def last_step_cost(self) -> StepCost | None:
         """The most recent step's cost breakdown, for the debug endpoints (D9)."""
         return self._last_step_cost
+
+    def recent_steps(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """The last `history_size` steps' shapes and costs, oldest first.
+
+        A single step's breakdown says what one step cost; a window says whether the
+        run is compute- or memory-bound *as a whole*, and where a latency curve bent.
+        That is the question the debug surface exists to answer (D9), and one step
+        cannot answer it.
+        """
+        window = list(self._recent_steps)
+        if limit is not None:
+            window = window[-limit:]
+        return [
+            {
+                "step": step,
+                "num_tokens": profile.num_tokens,
+                "num_reqs": profile.num_reqs,
+                "max_seq_len": max(profile.seq_lens, default=0),
+                "is_graph_hit": profile.is_graph_hit,
+                **cost.as_dict(),
+            }
+            for step, profile, cost in window
+        ]
 
     @property
     def num_steps(self) -> int:

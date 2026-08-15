@@ -338,7 +338,7 @@ class Scheduler:
         if self.running:
             num_common_prefix_blocks = (
                 self.kv_cache_manager.get_num_common_prefix_blocks(
-                    self.running[0].request_id, len(self.running)
+                    self.running[0].request_id
                 )
             )
 

@@ -87,12 +87,10 @@ class KVCacheCoordinator:
         for manager in self.single_type_managers:
             manager.free(request_id)
 
-    def get_num_common_prefix_blocks(
-        self, request_id: str, num_running: int
-    ) -> list[int]:
-        """Per group, blocks shared by every running request (R5.9)."""
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> list[int]:
+        """Per group, blocks shared by every request holding KV cache (R5.9)."""
         return [
-            manager.get_num_common_prefix_blocks(request_id, num_running)
+            manager.get_num_common_prefix_blocks(running_request_id)
             for manager in self.single_type_managers
         ]
 

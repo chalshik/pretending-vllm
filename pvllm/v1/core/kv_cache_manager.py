@@ -282,13 +282,20 @@ class KVCacheManager:
             tuple(list(group) for group in self.coordinator.get_blocks(request_id))
         )
 
-    def get_num_common_prefix_blocks(
-        self, request_id: str, num_running_requests: int
-    ) -> list[int]:
-        """Per group, blocks shared by every running request (R5.9)."""
-        return self.coordinator.get_num_common_prefix_blocks(
-            request_id, num_running_requests
-        )
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> list[int]:
+        """Per group, the leading blocks every KV-holding request shares. R5.9.
+
+        Pass any running request's id; the answer is a property of the pool, not of
+        that request. A real backend uses it to run cascade attention over the shared
+        prefix once instead of once per request.
+
+        It is computed and carried into `SchedulerOutput` and the attention metadata
+        because that is upstream's contract, but **the cost model does not read it**:
+        cascade attention is not modeled, so a step over a large shared prefix costs
+        the same here as one over none. Latencies on shared-prefix workloads are
+        therefore pessimistic relative to a real backend that takes the optimization.
+        """
+        return self.coordinator.get_num_common_prefix_blocks(running_request_id)
 
     def reset_prefix_cache(self) -> bool:
         """R6.10. Also resets the hit-rate counters, matching upstream."""

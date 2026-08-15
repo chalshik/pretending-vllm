@@ -83,8 +83,14 @@ class SingleTypeKVCacheManager(ABC):
             self.block_pool.free_blocks(reversed(blocks))
 
     @abstractmethod
-    def get_num_common_prefix_blocks(self, request_id: str, num_running: int) -> int:
-        """Blocks shared by every running request, for cascade attention (R5.9)."""
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+        """Blocks shared by every request holding KV cache, for cascade attention.
+
+        R5.9. Takes any running request's id and walks its blocks; it does not take a
+        request count, because the comparison upstream makes is against the number of
+        requests *holding blocks*, which is not the same set as the ones scheduled
+        this step.
+        """
 
 
 class FullAttentionManager(SingleTypeKVCacheManager):
@@ -111,13 +117,28 @@ class FullAttentionManager(SingleTypeKVCacheManager):
         blocks.extend(new_blocks)
         return new_blocks
 
-    def get_num_common_prefix_blocks(self, request_id: str, num_running: int) -> int:
-        """Zero until prefix caching lands in M2.
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+        """The leading run of blocks that every KV-holding request shares. R5.9.
 
-        Without a prefix cache no two requests share blocks, so the honest answer is
-        that nothing is common -- which also disables cascade attention, correctly.
+        A block is common when its `ref_cnt` equals the number of requests holding
+        blocks at all. The walk stops at the first block that is not -- these are
+        *prefix* blocks, so a shared block after an unshared one is not part of the
+        common prefix and counting it would let a cascade kernel read across
+        sequences.
+
+        The count is a lower bound, and upstream says so too: a request that holds
+        blocks but was not scheduled this step still counts in the denominator, so
+        every scheduled request can share a prefix and this can still return 0. There
+        is no cheap way to detect that, and under-reporting is the safe direction --
+        it only forgoes an optimization.
         """
-        return 0
+        num_common_blocks = 0
+        num_holders = len(self.req_to_blocks)
+        for block in self.req_to_blocks[running_request_id]:
+            if block.ref_cnt != num_holders:
+                break
+            num_common_blocks += 1
+        return num_common_blocks
 
 
 def get_manager_for_kv_cache_spec(

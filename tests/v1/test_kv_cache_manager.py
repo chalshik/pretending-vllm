@@ -28,9 +28,16 @@ def make_config(num_blocks: int = 16, block_size: int = 4) -> KVCacheConfig:
     )
 
 
-def make_manager(num_blocks: int = 16, block_size: int = 4, max_model_len: int = 256):
+def make_manager(
+    num_blocks: int = 16,
+    block_size: int = 4,
+    max_model_len: int = 256,
+    enable_caching: bool = False,
+):
     return KVCacheManager(
-        make_config(num_blocks, block_size), max_model_len=max_model_len
+        make_config(num_blocks, block_size),
+        max_model_len=max_model_len,
+        enable_caching=enable_caching,
     )
 
 
@@ -171,10 +178,66 @@ def test_prefix_cache_lookup_is_empty_until_m2():
 
 
 def test_common_prefix_blocks_are_zero_without_a_cache():
-    """Honest: without sharing nothing is common, which correctly disables cascade
+    """Without sharing nothing is common, which correctly disables cascade
     attention (R5.9)."""
     manager = make_manager()
-    assert manager.get_num_common_prefix_blocks("r0", 4) == [0]
+    manager.allocate_slots(make_request("r0", prompt_len=8), 8)
+    manager.allocate_slots(make_request("r1", prompt_len=8), 8)
+    assert manager.get_num_common_prefix_blocks("r0") == [0]
+
+
+def test_common_prefix_blocks_count_a_shared_prefix():
+    """R5.9. This is what a backend would run cascade attention over.
+
+    It was silently stubbed to zero through M2 -- prefix caching landed, but this
+    stayed behind. A `/debug/cost_model` response reporting zero shared blocks while
+    `/debug/blocks` showed two requests holding the same block is what exposed it.
+    """
+    manager = make_manager(block_size=4, enable_caching=True)
+
+    first = make_request("r0", prompt_len=12)
+    first.attach_block_hasher(manager.block_hasher)
+    manager.allocate_slots(first, 12)
+    first.num_computed_tokens = 12
+
+    second = make_request("r1", prompt_len=12)
+    second.attach_block_hasher(manager.block_hasher)
+    computed, num_cached = manager.get_computed_blocks(second)
+    manager.allocate_slots(second, 12 - num_cached, new_computed_blocks=computed)
+
+    # Both requests hold the cached blocks, so ref_cnt matches the holder count.
+    assert manager.get_num_common_prefix_blocks("r0")[0] > 0
+
+
+def test_common_prefix_stops_at_the_first_unshared_block():
+    """The count is a *prefix*, not a total. A shared block sitting after an
+    unshared one is not part of it -- counting it would let a cascade kernel read
+    across two sequences that diverged."""
+    manager = make_manager(block_size=4, enable_caching=True)
+
+    first = make_request("r0", prompt_len=8)
+    first.attach_block_hasher(manager.block_hasher)
+    manager.allocate_slots(first, 8)
+    first.num_computed_tokens = 8
+
+    second = make_request("r1", prompt_len=8)
+    second.attach_block_hasher(manager.block_hasher)
+    computed, num_cached = manager.get_computed_blocks(second)
+    manager.allocate_slots(second, 8 - num_cached, new_computed_blocks=computed)
+
+    # A third request sharing nothing drops every block's ref_cnt below the holder
+    # count, so no block is common to all three.
+    third = Request(
+        request_id="r2",
+        prompt_token_ids=list(range(100, 108)),
+        sampling_params=SamplingParams(max_tokens=16),
+        arrival_time=0.0,
+    )
+    third.attach_block_hasher(manager.block_hasher)
+    computed, num_cached = manager.get_computed_blocks(third)
+    manager.allocate_slots(third, 8 - num_cached, new_computed_blocks=computed)
+
+    assert manager.get_num_common_prefix_blocks("r0") == [0]
 
 
 def test_block_ids_are_grouped_per_kv_cache_group():

@@ -20,6 +20,16 @@ def add_serve_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--uvicorn-log-level", default="info")
+    parser.add_argument(
+        "--enable-debug-endpoints",
+        action="store_true",
+        help=(
+            "attach the read-only /debug/* introspection routes: scheduler state, "
+            "block pool map, per-request state, prefix cache, cost model, and the "
+            "resolved config. They expose prompt token ids, so they are off by "
+            "default (mirrors upstream's VLLM_SERVER_DEV_MODE)."
+        ),
+    )
     AsyncEngineArgs.add_cli_args(parser)
     return parser
 
@@ -38,5 +48,5 @@ def run_serve(args: argparse.Namespace) -> None:
         "modeled, not measured. See the fidelity contract in the README."
     )
 
-    app = build_app(vllm_config)
+    app = build_app(vllm_config, enable_debug_endpoints=args.enable_debug_endpoints)
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.uvicorn_log_level)
