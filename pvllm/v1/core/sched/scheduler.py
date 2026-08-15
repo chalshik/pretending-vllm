@@ -126,6 +126,11 @@ class Scheduler:
         #: Built by `_trace_step`, emitted by the engine core once stamped.
         self.pending_step_record: dict[str, Any] | None = None
 
+        #: Requests admitted this step, awaiting a SCHEDULED event from the core.
+        #: Same reason as the step record: only the core owns a clock (R19.1), and
+        #: the queue wait is the interval between this stamp and the QUEUED one.
+        self.pending_scheduled: list[Request] = []
+
     # --- admission -----------------------------------------------------------
 
     def add_request(self, request: Request) -> None:
@@ -304,6 +309,9 @@ class Scheduler:
 
                 request = self.waiting.pop_request()
                 self.running.append(request)
+                # Collected rather than stamped: the scheduler has no clock (R19.1),
+                # so the engine core dates these before the step's outputs are built.
+                self.pending_scheduled.append(request)
 
                 if request.status == RequestStatus.WAITING:
                     scheduled_new_reqs.append(request)
@@ -612,6 +620,16 @@ class Scheduler:
         """Hand the last step's record to the engine core for stamping."""
         record, self.pending_step_record = self.pending_step_record, None
         return record
+
+    def take_newly_scheduled(self) -> list[Request]:
+        """Hand this step's admissions to the core so it can date them.
+
+        Must be drained between `schedule()` and `update_from_output()`: the latter
+        calls `take_events()`, and an event recorded after that would ride out on the
+        *next* step's output, attributing the wait to the wrong instant.
+        """
+        requests, self.pending_scheduled = self.pending_scheduled, []
+        return requests
 
     def make_stats(self) -> dict[str, Any]:
         """A snapshot for the metrics layer (R12.1)."""

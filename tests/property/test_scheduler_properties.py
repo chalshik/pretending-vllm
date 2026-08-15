@@ -41,6 +41,20 @@ SETTINGS = settings(
 )
 
 
+def reachable_num_blocks(
+    num_blocks: int, block_size: int, max_model_len: int = 128
+) -> int:
+    """Raise a generated pool size to one the engine would actually boot.
+
+    Hypothesis draws `num_blocks` to vary memory pressure, which is the point of
+    these tests -- but a draw below one max-length request is a configuration
+    `compute_memory_profile` rejects at startup (R10.6). Clamping up rather than
+    filtering with `assume` keeps every draw useful; filtering would discard the
+    smallest pools, which are exactly the ones that exercise eviction.
+    """
+    return max(num_blocks, -(-max_model_len // block_size))
+
+
 def build_scheduler(
     block_size: int,
     num_blocks: int,
@@ -49,6 +63,25 @@ def build_scheduler(
     enable_caching: bool,
     max_model_len: int = 128,
 ) -> Scheduler:
+    """A scheduler over a pool that can hold at least one max-length request.
+
+    That invariant is not a convenience -- it is R10.6, which the real engine
+    enforces at startup in `compute_memory_profile`. Without it hypothesis explores
+    configurations no engine will ever boot: a request needing more blocks than the
+    pool contains queues forever, because the capacity it is waiting for cannot come
+    into existence. The resulting "the pool never drains" failure is real but
+    unreachable, and chasing it would mean weakening a scheduler invariant to satisfy
+    a config the engine refuses.
+
+    Building the scheduler directly is what bypasses that check, so it is re-asserted
+    here rather than left implicit.
+    """
+    blocks_for_one_request = -(-max_model_len // block_size)
+    assert num_blocks >= blocks_for_one_request, (
+        f"unreachable config: {num_blocks} blocks of {block_size} cannot hold one "
+        f"request at max_model_len={max_model_len} ({blocks_for_one_request} needed). "
+        f"The engine rejects this at startup (R10.6)."
+    )
     config = VllmConfig(
         model_config=ModelConfig(model="tiny-test", max_model_len=max_model_len),
         cache_config=CacheConfig(
@@ -211,6 +244,7 @@ def test_block_accounting_balances_and_usage_stays_in_range(
     PVLLM_DEBUG_INVARIANTS, which conftest sets; this drives it over random
     workloads so the assertion is actually reached from many states.
     """
+    num_blocks = reachable_num_blocks(num_blocks, block_size)
     scheduler = build_scheduler(block_size, num_blocks, 64, 4, enable_caching)
     add_workload(scheduler, workload)
     pool = scheduler.kv_cache_manager.block_pool
@@ -237,6 +271,7 @@ def test_the_pool_returns_to_empty_after_draining(
 ):
     """A leak shows up here and nowhere else: every count balances step to step
     while blocks are never returned."""
+    num_blocks = reachable_num_blocks(num_blocks, block_size)
     scheduler = build_scheduler(block_size, num_blocks, 64, 4, enable_caching)
     add_workload(scheduler, workload)
     drain(scheduler)

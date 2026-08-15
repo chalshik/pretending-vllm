@@ -16,7 +16,7 @@ from pvllm.logger import init_logger
 from pvllm.outputs import CompletionOutput, RequestOutput
 from pvllm.sampling_params import RequestOutputKind, SamplingParams
 from pvllm.tokenizers.protocol import TokenizerLike
-from pvllm.v1.engine import EngineCoreOutput, FinishReason
+from pvllm.v1.engine import EngineCoreEventType, EngineCoreOutput, FinishReason
 from pvllm.v1.engine.detokenizer import (
     IncrementalDetokenizer,
     SlowIncrementalDetokenizer,
@@ -48,6 +48,10 @@ class RequestState:
     #: When the most recent output token arrived, for inter-token latency.
     last_token_time: float = 0.0
     num_generation_tokens: int = 0
+    #: When the scheduler first admitted this request, from its SCHEDULED event.
+    #: Zero until the core reports one, which is what separates the queue wait from
+    #: the prefill -- without it the two are indistinguishable inside TTFT.
+    scheduled_time: float = 0.0
 
     def record_tokens(self, now: float, count: int) -> list[float]:
         """Fold in `count` new tokens. Returns inter-token latencies to observe.
@@ -82,14 +86,21 @@ class RequestState:
         # skew the decode histogram toward prefill cost.
         decode = max(0.0, now - self.first_token_time) if self.first_token_time else 0.0
         num_after_first = max(0, self.num_generation_tokens - 1)
+        # TTFT splits into the wait for admission and the prefill that followed it.
+        # A request that queued for 200ms and prefilled in 5ms has the same TTFT as
+        # one that prefilled for 205ms, and they call for opposite responses -- more
+        # capacity versus a smaller batch. The split is only available because the
+        # core dates the scheduler's admissions (EngineCoreEventType.SCHEDULED).
+        queue = (
+            max(0.0, self.scheduled_time - self.arrival_time)
+            if (self.scheduled_time)
+            else 0.0
+        )
         return FinishedRequestStats(
             finish_reason=finish_reason,
             e2e_latency=e2e,
-            # The queue wait is not separable from prefill without a scheduled-time
-            # stamp from the core, so TTFT stands in for the prefill phase and the
-            # queue histogram stays at zero rather than reporting a made-up split.
-            queue_time=0.0,
-            prefill_time=ttft,
+            queue_time=queue,
+            prefill_time=max(0.0, ttft - queue),
             inference_time=e2e,
             decode_time=decode,
             time_to_first_token=ttft,
@@ -173,6 +184,16 @@ class OutputProcessor:
 
             finished = finish_reason is not None
             state.num_cached_tokens = engine_output.num_cached_tokens
+
+            # The first SCHEDULED event ends the queue wait. Only the first: a
+            # preempted request is admitted again later, and taking the newer stamp
+            # would report a queue time longer than the request's whole life.
+            for event in engine_output.events or ():
+                if (
+                    event.type is EngineCoreEventType.SCHEDULED
+                    and not state.scheduled_time
+                ):
+                    state.scheduled_time = event.timestamp
 
             num_new = len(engine_output.new_token_ids)
             latencies = state.record_tokens(now, num_new)

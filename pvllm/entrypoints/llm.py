@@ -36,6 +36,20 @@ class LLM:
         self.llm_engine = LLMEngine.from_engine_args(engine_args)
         self._request_counter = 0
 
+    @classmethod
+    def from_engine_args(cls, engine_args: EngineArgs) -> LLM:
+        """Build from already-resolved args, as upstream's classmethod does.
+
+        The benchmarks parse a full `EngineArgs` off the command line; routing that
+        back through `__init__`'s kwargs would mean flattening a dataclass into a
+        dict and rebuilding it, and any field that failed to round-trip would be
+        silently dropped.
+        """
+        instance = cls.__new__(cls)
+        instance.llm_engine = LLMEngine.from_engine_args(engine_args)
+        instance._request_counter = 0
+        return instance
+
     def generate(
         self,
         prompts: str | Sequence[str] | Sequence[list[int]],

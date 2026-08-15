@@ -205,6 +205,68 @@ def test_stats_declare_that_durations_are_modeled():
     engine.shutdown()
 
 
+def collect_finished(engine: LLMEngine, limit: int = 500) -> list:
+    """Drain, keeping every step's finished-request stats rather than the last."""
+    finished = []
+    steps = 0
+    while engine.has_unfinished_requests() and steps < limit:
+        engine.step()
+        finished.extend(engine.last_iteration_stats.finished_requests)
+        steps += 1
+    return finished
+
+
+def test_ttft_splits_into_queue_wait_and_prefill():
+    """R12.1. Two requests with the same TTFT can call for opposite responses -- one
+    queued for 200ms and prefilled in 5, the other prefilled for 205 -- and only the
+    split distinguishes them. The interval comes from the SCHEDULED event, which the
+    engine core dates because the scheduler has no clock (R19.1)."""
+    engine = make_engine(max_num_seqs=1)
+    for index in range(4):
+        engine.add_request(
+            f"r{index}", f"prompt number {index}", SamplingParams(max_tokens=8)
+        )
+    finished = collect_finished(engine)
+    engine.shutdown()
+
+    assert len(finished) == 4
+    # The first request in is admitted immediately; the ones behind it wait.
+    assert min(f.queue_time for f in finished) == 0.0
+    assert max(f.queue_time for f in finished) > 0.0
+    for stats in finished:
+        assert stats.queue_time >= 0.0
+        assert stats.prefill_time >= 0.0
+        # The two halves reconstruct TTFT rather than merely correlating with it.
+        assert stats.queue_time + stats.prefill_time == pytest.approx(
+            stats.time_to_first_token
+        )
+
+
+def test_a_preempted_request_does_not_report_a_second_queue_wait():
+    """Only the *first* admission ends the wait. Taking the later stamp would report
+    a queue time longer than the request's whole lifetime, since a preempted request
+    is admitted again well after it arrived."""
+    engine = make_engine(
+        max_num_seqs=4,
+        max_model_len=256,
+        block_size=8,
+        num_gpu_blocks_override=32,
+        enable_prefix_caching=False,
+    )
+    for index in range(4):
+        engine.add_request(
+            f"r{index}",
+            f"a prompt long enough to need several blocks, number {index}",
+            SamplingParams(max_tokens=24),
+        )
+    finished = collect_finished(engine)
+    engine.shutdown()
+
+    assert finished
+    for stats in finished:
+        assert stats.queue_time <= stats.e2e_latency
+
+
 def test_the_multiprocess_client_names_what_is_missing():
     config = EngineArgs(**BASE).create_engine_config()
     with pytest.raises(NotImplementedError, match="multiprocess engine core"):

@@ -102,6 +102,29 @@ pvllm serve --model dense-0.6b --enable-debug-endpoints
 All read-only, all off by default — they expose prompt token ids, and the gate mirrors upstream's
 `VLLM_SERVER_DEV_MODE`. `/debug/cost_model` reports modeled durations; see the fidelity contract.
 
+## Comparing configurations
+
+This is the part that costs a GPU reservation otherwise. `pvllm bench` mirrors upstream's
+`vllm bench` layout — `latency`, `throughput`, `serve` — plus a sweep runner:
+
+```bash
+pvllm bench sweep --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb --sweep max-num-seqs=1,2,4,8,16 -o sweep.csv
+```
+
+One tidy CSV row per cell, ready to plot. Sweepable: `max-num-seqs`, `max-num-batched-tokens`,
+`block-size`, `gpu-memory-utilization`, `device-card`, `enable-prefix-caching`,
+`enable-chunked-prefill`, `request-rate`, `num-prompts`, `input-len`, `output-len`.
+
+`bench serve` generates arrivals from a gamma process (`--request-rate`, `--burstiness`) and reports
+TTFT split into **queue wait** and **prefill** — the distinction a capacity decision turns on, since
+a request that waited 200 ms and prefilled in 5 needs more concurrency while one that prefilled for
+205 ms needs a smaller batch.
+
+Two things to know. Durations are modeled, so read a sweep for where the knee is and which way a
+knob moves things, never for the number itself. And arrivals are seeded from `--seed`, so rerunning
+a comparison reruns the same workload — unlike upstream, where the arrival process draws from global
+random state.
+
 ## Fidelity contract
 
 **Current state: `asserted`, not `verified`.** Golden traces captured from a real vLLM run at the

@@ -178,6 +178,14 @@ class EngineCore:
             return {}, False
 
         scheduler_output = self.scheduler.schedule()
+
+        # R19.1: the scheduler decides *what* was admitted, this object decides
+        # *when*. Stamped before the model runs so the queue wait ends where the
+        # request's own work begins, not after the whole batch's forward pass.
+        scheduled_at = self.clock.time()
+        for request in self.scheduler.take_newly_scheduled():
+            request.record_event(EngineCoreEventType.SCHEDULED, scheduled_at)
+
         model_output = self.executor.execute_model(scheduler_output)
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
