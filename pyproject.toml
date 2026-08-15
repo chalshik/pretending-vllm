@@ -85,11 +85,11 @@ exclude = ["vendor/"]
 module = ["tests.*"]
 disallow_untyped_defs = false
 
-# `pvllm.config` lands in M1. Until then the platform seam forward-references
-# VllmConfig under TYPE_CHECKING so the signature matches upstream's. Delete this
-# override when pvllm/config/ exists.
+# The `realtok` extra is optional by design (D3): the base install must pull no
+# tokenizer library. The import in tokenizers/registry.py is guarded and only runs
+# when the extra is present, so its absence is not a type error.
 [[tool.mypy.overrides]]
-module = ["pvllm.config", "pvllm.config.*"]
+module = ["tokenizers", "tokenizers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
