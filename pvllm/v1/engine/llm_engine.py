@@ -96,6 +96,11 @@ class LLMEngine:
         """Run one engine step and return whatever finished or advanced."""
         engine_core_outputs = self.engine_core.get_output()
         if not engine_core_outputs:
+            # Cleared, not left alone. A caller accumulating `finished_requests`
+            # across steps would otherwise re-count the last productive step's
+            # finishers on every barren step -- which happens whenever a step is all
+            # chunked prefill -- inflating every derived throughput and percentile.
+            self.last_iteration_stats = IterationStats()
             return []
 
         now = self.engine_core.clock_time

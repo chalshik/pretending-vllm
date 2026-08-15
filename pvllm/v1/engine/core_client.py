@@ -86,8 +86,24 @@ class EngineCoreClient(ABC):
     def make_stats(self) -> dict[str, Any]:
         """A snapshot of engine statistics for the metrics layer."""
 
+    async def make_stats_async(self) -> dict[str, Any]:
+        """As `make_stats`, from an event loop.
+
+        On the base class with a synchronous default, so an async caller has one
+        method to call whatever the transport is. The multiprocess client overrides
+        it with a round trip; in process the two are the same call. Leaving the async
+        form off the interface is what made `/metrics` return 500 under the
+        multiprocess core -- the server had only the synchronous form to reach for,
+        and that transport refused it.
+        """
+        return self.make_stats()
+
     @abstractmethod
     def reset_prefix_cache(self) -> bool: ...
+
+    async def reset_prefix_cache_async(self) -> bool:
+        """As `reset_prefix_cache`, from an event loop."""
+        return self.reset_prefix_cache()
 
     @abstractmethod
     def has_requests(self) -> bool:

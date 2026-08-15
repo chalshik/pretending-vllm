@@ -264,8 +264,20 @@ def test_a_preempted_request_does_not_report_a_second_queue_wait():
     engine.shutdown()
 
     assert finished
+    # Preemption is what makes this test mean anything: without it there is only one
+    # SCHEDULED event and nothing to take the wrong one of.
+    assert engine.make_stats()["num_preemptions"] > 0, (
+        "the workload did not preempt, so this test would pass on an engine that "
+        "took the *last* SCHEDULED stamp instead of the first"
+    )
     for stats in finished:
-        assert stats.queue_time <= stats.e2e_latency
+        # The queue wait ends at the *first* admission. Taking a later one would put
+        # `scheduled_time` after the first token, making prefill_time clamp to zero
+        # while queue_time swallowed the prefill -- which is what this pins.
+        assert stats.queue_time <= stats.time_to_first_token
+        assert stats.queue_time + stats.prefill_time == pytest.approx(
+            stats.time_to_first_token
+        )
 
 
 def test_a_custom_executor_cannot_cross_a_process_boundary():
@@ -331,10 +343,10 @@ async def test_cancelling_a_generator_frees_its_blocks_within_one_step():
 
     generator = engine.generate("hello", SamplingParams(max_tokens=200), "s0")
     await anext(generator)
-    assert engine.make_stats()["kv_cache_usage"] > 0
+    assert (await engine.make_stats())["kv_cache_usage"] > 0
 
     await generator.aclose()
-    assert engine.make_stats()["kv_cache_usage"] == 0.0
+    assert (await engine.make_stats())["kv_cache_usage"] == 0.0
     assert await engine.get_num_unfinished_requests() == 0
     engine.shutdown()
 
@@ -345,7 +357,7 @@ async def test_explicit_abort_removes_the_request():
     await anext(generator)
 
     await engine.abort("s0")
-    assert engine.make_stats()["kv_cache_usage"] == 0.0
+    assert (await engine.make_stats())["kv_cache_usage"] == 0.0
     await generator.aclose()
     engine.shutdown()
 

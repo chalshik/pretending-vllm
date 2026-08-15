@@ -52,16 +52,39 @@ class EngineIntrospector:
 
     def __init__(self, engine: AsyncLLM) -> None:
         self.engine = engine
+        self._check_in_process()
+
+    def _check_in_process(self) -> None:
+        """Refuse at construction rather than at request time. R4.2.
+
+        These endpoints read engine state directly, which only works in process. A
+        server started with both `--enable-debug-endpoints` and the multiprocess core
+        used to accept the flag and then return 500 from every debug route -- a
+        failure that shows up only when someone reaches for the debugging tools,
+        which is the worst moment to discover a configuration is unsupported.
+        """
+        from pvllm.v1.engine.core_client import InprocClient
+
+        if not isinstance(self.engine.engine_core, InprocClient):
+            raise NotImplementedError(
+                "the /debug/* endpoints read engine state directly and need the "
+                "in-process engine core, but this server was started with "
+                "PVLLM_ENABLE_V1_MULTIPROCESSING=1. Over a process boundary the "
+                "introspector would need an RPC for every field, which does not "
+                "exist yet. Run without multiprocess mode to use --enable-debug-"
+                "endpoints, or drop the flag."
+            )
 
     @property
     def _core(self) -> Any:
+        # Narrowed here rather than trusted: `_check_in_process` ran at construction,
+        # but the type checker cannot carry that across, and an untyped reach into
+        # the client would hide a real mistake behind `Any`.
         from pvllm.v1.engine.core_client import InprocClient
 
-        assert isinstance(self.engine.engine_core, InprocClient), (
-            "introspection reads engine state directly and needs the in-process "
-            "engine core; over a process boundary it becomes an RPC (M4)"
-        )
-        return self.engine.engine_core.engine_core
+        client = self.engine.engine_core
+        assert isinstance(client, InprocClient)
+        return client.engine_core
 
     # --- scheduler -----------------------------------------------------------
 

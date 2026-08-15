@@ -101,7 +101,12 @@ class RequestState:
             e2e_latency=e2e,
             queue_time=queue,
             prefill_time=max(0.0, ttft - queue),
-            inference_time=e2e,
+            # From admission to the last token, not from arrival: the metric's help
+            # text says "time spent in RUNNING phase", and upstream measures
+            # `last_token_ts - scheduled_ts`. Including the wait would make
+            # queue + inference exceed the end-to-end latency, so a dashboard
+            # stacking the phases would report more time than the request took.
+            inference_time=max(0.0, e2e - queue),
             decode_time=decode,
             time_to_first_token=ttft,
             time_per_output_token=(decode / num_after_first)

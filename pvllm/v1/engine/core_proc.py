@@ -126,13 +126,32 @@ class EngineCoreProc(EngineCore):
             except zmq.ZMQError:  # pragma: no cover - shutdown race
                 return
 
-            request_type = EngineCoreRequestType(tag)
-            if request_type is EngineCoreRequestType.ADD:
-                self.input_queue.put((request_type, _request_decoder.decode(payload)))
-            elif request_type is EngineCoreRequestType.ABORT:
-                self.input_queue.put((request_type, _abort_decoder.decode(payload)))
-            elif request_type is EngineCoreRequestType.UTILITY:
-                self.input_queue.put((request_type, _utility_decoder.decode(payload)))
+            # Decoding is the one place a *client* bug can reach this thread, and
+            # letting it escape would kill the thread and leave the process running
+            # with nobody draining the socket -- an engine that is not dead but
+            # permanently deaf, whose symptom is a utility call timing out thirty
+            # seconds later with a message naming the wrong cause. A frame that
+            # cannot be decoded is dropped loudly instead.
+            try:
+                request_type = EngineCoreRequestType(tag)
+                if request_type is EngineCoreRequestType.ADD:
+                    decoded: Any = _request_decoder.decode(payload)
+                elif request_type is EngineCoreRequestType.ABORT:
+                    decoded = _abort_decoder.decode(payload)
+                elif request_type is EngineCoreRequestType.UTILITY:
+                    decoded = _utility_decoder.decode(payload)
+                else:
+                    continue
+            except Exception:
+                logger.exception(
+                    "dropping an undecodable input frame (tag %r, %d bytes). The "
+                    "engine is still serving; the request that produced this frame "
+                    "is lost.",
+                    tag,
+                    len(payload),
+                )
+                continue
+            self.input_queue.put((request_type, decoded))
 
     def _write_output_socket(self) -> None:
         while self._running:

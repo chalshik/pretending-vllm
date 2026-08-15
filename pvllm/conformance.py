@@ -27,10 +27,17 @@ somebody with hardware records the same workloads from real vLLM, those goldens
 replace these, the same tests compare against them, and the contract is `verified`.
 `compare` refuses to let the difference go unnoticed.
 
-The recorder attaches to a `BlockPool` by wrapping its bound methods and touches
-nothing else, so it works on *upstream's* `BlockPool` too -- the method names it
-wraps (`get_new_blocks`, `free_blocks`, `cache_full_blocks`) are the same at the pin.
-That is what makes the promotion path in D4 a procedure rather than an aspiration.
+The recorder attaches to a `BlockPool` by wrapping two bound methods and touches
+nothing else, so `attach()` works on *upstream's* `BlockPool` unchanged --
+`get_new_blocks` and `free_blocks` have the same names and signatures at the pin.
+(It does not wrap `cache_full_blocks`; an earlier version of this note claimed it
+did.)
+
+`snapshot_hashes` is the part that does **not** transfer. The keys are the same type
+in both trees, but upstream wraps the map in a `BlockHashToBlockMap` that is not
+iterable at the pin, so a `vllm`-sourced capture has to supply its own hash snapshot.
+Everything else in a record (C1, C2, C4, and hit *rates*) crosses unchanged, which is
+why `compare(..., compare_hash_values=False)` exists.
 """
 
 from __future__ import annotations
@@ -107,11 +114,27 @@ class BlockPoolRecorder:
         Hash *values* only compare across engines when both derived the sentinel the
         same way -- see `compute_none_hash`. Hit *rates* compare unconditionally,
         which is why both are recorded.
+
+        **This is the one method that does not transfer to upstream.** The *keys*
+        are the same type there -- both are `NewType("BlockHashWithGroupId", bytes)`
+        -- but at the pin upstream replaced the plain dict with a `BlockHashToBlockMap`
+        class that defines `__len__` and no `__iter__`, so iterating it raises. It is
+        named here rather than caught, because a capture that silently recorded no
+        hashes would produce a golden whose C3 section is empty and compares equal to
+        anything.
         """
-        self.cached_hashes = sorted(
-            key.block_hash.hex() if hasattr(key, "block_hash") else bytes(key).hex()
-            for key in pool.cached_block_hash_to_block
-        )
+        cache = pool.cached_block_hash_to_block
+        try:
+            keys = list(cache)
+        except TypeError as exc:
+            raise NotImplementedError(
+                f"cannot iterate {type(cache).__name__} to snapshot block hashes. "
+                f"Upstream's BlockHashToBlockMap is not iterable at the pin; reach "
+                f"into its private `_cache` to record C3's hash values, or compare "
+                f"with compare_hash_values=False, which is the honest option until "
+                f"someone does."
+            ) from exc
+        self.cached_hashes = sorted(bytes(key).hex() for key in keys)
 
 
 @dataclass
@@ -328,17 +351,31 @@ def record_workload(
     """
     import tempfile
 
-    from pvllm import UPSTREAM_VERSION
     from pvllm.entrypoints.llm import LLM
-    from pvllm.sampling_params import SamplingParams
-    from pvllm.tracing import read_trace
 
     directory = Path(trace_dir) if trace_dir else Path(tempfile.mkdtemp())
     directory.mkdir(parents=True, exist_ok=True)
     trace_path = directory / f"{workload.name}.jsonl"
 
     engine = LLM("tiny-test", trace_path=str(trace_path), **workload.engine_kwargs())
-    core = engine.llm_engine.engine_core.engine_core  # type: ignore[attr-defined]
+    try:
+        return _record(engine, workload, source, trace_path)
+    finally:
+        # In a `finally` because the trace file is opened by the engine: a workload
+        # that raises would otherwise leave a `BufferedWriter` open until the garbage
+        # collector noticed, and on Windows the next test to touch that path fails
+        # for reasons that have nothing to do with it.
+        engine.shutdown()
+
+
+def _record(
+    engine: Any, workload: Workload, source: str, trace_path: Path
+) -> ConformanceRecord:
+    from pvllm import UPSTREAM_VERSION
+    from pvllm.sampling_params import SamplingParams
+    from pvllm.tracing import read_trace
+
+    core = engine.llm_engine.engine_core.engine_core
     scheduler = core.scheduler
     pool = scheduler.kv_cache_manager.block_pool
 
@@ -362,6 +399,9 @@ def record_workload(
     recorder.snapshot_hashes(pool)
     preemptions = {"total": scheduler.num_preemptions_total}
 
+    # Shut down *before* reading the trace: the writer flushes every 64 records, so
+    # reading it while still open loses the tail and the recording silently comes up
+    # short. (The outer `finally` shuts down again; both paths are idempotent.)
     engine.shutdown()
 
     steps: list[dict[str, Any]] = []

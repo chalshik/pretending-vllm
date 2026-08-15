@@ -73,6 +73,10 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
         "does not model"
     )
     start = core.clock_time
+    # The engine's step counter is cumulative over its lifetime, and `bench latency`
+    # reuses one engine across iterations -- so the count has to be differenced or
+    # every iteration after the first reports the sum of all of them.
+    steps_before = int(llm_engine.make_stats().get("step_index", 0))
 
     pending = sorted(enumerate(requests), key=lambda item: item[1].arrival)
     next_index = 0
@@ -117,7 +121,7 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
     return RunResult(
         finished=finished,
         duration=duration,
-        num_steps=stats.get("step_index", 0),
+        num_steps=int(stats.get("step_index", 0)) - steps_before,
         num_preemptions=stats.get("num_preemptions", 0),
         prefix_cache_hit_rate=(
             stats.get("prefix_cache_hits", 0) / queries if queries else 0.0
@@ -142,5 +146,18 @@ def synthetic_prompt(index: int, num_tokens: int, vocab_size: int) -> list[int]:
     if num_tokens <= 0:
         raise ValueError(f"num_tokens must be positive, got {num_tokens}")
     # Avoid the low ids, which the mock tokenizer reserves for special tokens.
-    base = 100 + (index * 7919) % max(1, vocab_size - 200)
-    return [100 + (base + i * 31) % max(1, vocab_size - 200) for i in range(num_tokens)]
+    span = max(1, vocab_size - 200)
+    if num_tokens < 2:
+        raise ValueError(
+            "num_tokens must be at least 2 for prompts to be distinguishable; a "
+            "single-token prompt cannot encode a request index"
+        )
+
+    # The index is carried in *two* positions with coprime strides, so the prompt is
+    # injective over indices up to `span * span` rather than repeating every `span`.
+    # The single-position version aliased silently: at tiny-test's 1024-token vocab
+    # that is every 824 requests, and a `--num-prompts 1000` run turned into a
+    # prefix-cache benchmark reporting a hit rate nobody asked for.
+    high, low = divmod(index, span)
+    head = [100 + low % span, 100 + (high * 7919) % span]
+    return head + [100 + (low + high + i * 31) % span for i in range(num_tokens - 2)]

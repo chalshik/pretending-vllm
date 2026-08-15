@@ -43,7 +43,6 @@ from pvllm.logger import init_logger
 from pvllm.outputs import RequestOutput
 from pvllm.sampling_params import SamplingParams
 from pvllm.v1.engine.async_llm import AsyncLLM
-from pvllm.v1.engine.core_client import InprocClient
 
 logger = init_logger(__name__)
 
@@ -62,7 +61,6 @@ class OpenAIServingCompletion:
 
     def _created(self) -> int:
         """The engine's clock, never wall time (R19.1)."""
-        assert isinstance(self.engine.engine_core, InprocClient)
         return int(self.engine.engine_core.clock_time)
 
     async def create_completion(

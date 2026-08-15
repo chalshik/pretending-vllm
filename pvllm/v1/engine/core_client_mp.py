@@ -245,6 +245,11 @@ class MPClient(EngineCoreClient):
 
     def add_request(self, request: EngineCoreRequest) -> None:
         self._send(EngineCoreRequestType.ADD, request)
+        self._note_submitted()
+
+    def _note_submitted(self) -> None:
+        """Overridden by the async client, which tracks outstanding work."""
+        return None
 
     def abort_requests(self, request_ids: list[str]) -> None:
         if request_ids:
@@ -357,11 +362,17 @@ class AsyncMPClient(MPClient):
     def __init__(self, vllm_config: VllmConfig, log_stats: bool = True) -> None:
         self._frames: queue.Queue[dict[int, EngineCoreOutputs]] = queue.Queue()
         self._lock = threading.Lock()
+        #: Requests submitted and not yet seen finished. See `has_requests`.
+        self._outstanding = 0
         super().__init__(vllm_config, log_stats=log_stats)
         self._reader = threading.Thread(
             target=self._read_frames, name="pvllm-client-reader", daemon=True
         )
         self._reader.start()
+
+    def _note_submitted(self) -> None:
+        with self._lock:
+            self._outstanding += 1
 
     def _read_frames(self) -> None:
         while not self._closed:
@@ -377,6 +388,13 @@ class AsyncMPClient(MPClient):
             except EngineDeadError:
                 return
             if outputs is not None:
+                with self._lock:
+                    for client_outputs in outputs.values():
+                        self._outstanding -= sum(
+                            1
+                            for output in client_outputs.outputs
+                            if output.finish_reason is not None
+                        )
                 self._frames.put(outputs)
 
     def get_output(self) -> dict[int, EngineCoreOutputs]:
@@ -426,13 +444,19 @@ class AsyncMPClient(MPClient):
         return reply.result
 
     def has_requests(self) -> bool:
-        """Whether work remains, from what has already been received.
+        """Whether work remains, tracked locally rather than round-tripped.
 
-        Synchronous by necessity -- the interface is -- so it answers from the local
-        frame queue rather than round-tripping. `get_output_async` does the
-        authoritative check, where it can await.
+        Synchronous by necessity -- the interface is -- so it cannot ask the engine.
+        Answering only "is a frame already waiting" was wrong in the direction that
+        matters: `AsyncLLM`'s output handler gates on this, so between submitting a
+        request and its first frame arriving the handler saw False, fell into its
+        `sleep(0)` branch, and spun the event loop at full speed for the whole of the
+        engine's first step.
+
+        So the client counts what it has sent and what has come back finished. Exact
+        enough for a loop condition, and it needs no round trip on the hot path.
         """
-        return not self._frames.empty()
+        return self._outstanding > 0 or not self._frames.empty()
 
     def get_num_unfinished_requests(self) -> int:
         raise NotImplementedError(

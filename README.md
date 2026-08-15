@@ -120,8 +120,17 @@ pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --clock-mode real
 report **identical** numbers — they differ only in whether the process waits. So a virtual-clock CI
 run and a real-clock demo can be compared directly.
 
-Real mode is faithful all the way through startup: an 8B model on `datacenter-80gb` takes about
-eight seconds to become ready, because that is what the memory model says loading its weights costs.
+Real mode is faithful all the way through startup — but only with the roofline cost model, which is
+not the default:
+
+```bash
+pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --clock-mode real --cost-model-profile roofline
+```
+
+That takes about eight seconds to become ready, because that is what the cost model says loading an
+8B model's weights over `datacenter-80gb`'s memory bandwidth costs. Under the default `constant`
+profile weight loading is free and the server is ready in about a tenth of a second, which will not
+exercise a client's readiness timeout at all.
 
 ## Running the engine in its own process
 

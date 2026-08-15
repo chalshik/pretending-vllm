@@ -71,14 +71,14 @@ class ServerState:
         self.registry = registry
         self.stat_logger = PrometheusStatLogger(vllm_config, registry=registry)
 
-    def refresh_metrics(self) -> None:
+    async def refresh_metrics(self) -> None:
         """Pull the engine's current state into the Prometheus gauges.
 
         Scraped rather than pushed: the engine core owns the numbers, and having
         `/metrics` read them at scrape time means a scrape can never observe a
         half-updated step.
         """
-        stats = self.engine.make_stats()
+        stats = await self.engine.make_stats()
         self.stat_logger.record(
             SchedulerStats(
                 num_running_reqs=stats["num_running_reqs"],
@@ -199,7 +199,7 @@ def build_app(
     @app.get("/metrics")
     async def metrics() -> Response:
         """R12.1, C6."""
-        state.refresh_metrics()
+        await state.refresh_metrics()
         return Response(
             content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST
         )

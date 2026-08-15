@@ -206,8 +206,8 @@ class AsyncLLM:
         """
         return not self.errored
 
-    def make_stats(self) -> dict[str, Any]:
-        return self.engine_core.make_stats()
+    async def make_stats(self) -> dict[str, Any]:
+        return await self.engine_core.make_stats_async()
 
     def take_iteration_stats(self) -> IterationStats:
         """Drain the accumulated per-request timings.
@@ -220,7 +220,7 @@ class AsyncLLM:
         return stats
 
     async def reset_prefix_cache(self) -> bool:
-        return self.engine_core.reset_prefix_cache()
+        return await self.engine_core.reset_prefix_cache_async()
 
     async def check_health(self) -> None:
         if self.errored:

@@ -25,6 +25,7 @@ from prometheus_client import Counter, Gauge, Histogram
 
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
+from pvllm.v1.engine import FINISH_REASON_STRINGS
 from pvllm.v1.metrics.stats import IterationStats, SchedulerStats
 
 logger = init_logger(__name__)
@@ -213,6 +214,13 @@ class PrometheusStatLogger:
             extra=["finished_reason"],
         )
         self._request_success_labelvalues = labelvalues
+        # Instantiated for every finish reason at construction, as upstream does.
+        # Without this the series does not exist until the first request finishes
+        # with that reason, so a dashboard panel is empty at t=0 and -- worse -- the
+        # C6 conformance golden records the family with no labels at all, which made
+        # renaming `finished_reason` a change the whole suite passed.
+        for reason in FINISH_REASON_STRINGS:
+            self._counter_request_success.labels(*labelvalues, reason)
 
         # --- histograms ------------------------------------------------------
         self.histogram_iteration_tokens = histogram(

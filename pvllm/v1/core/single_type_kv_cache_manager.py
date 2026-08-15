@@ -102,7 +102,14 @@ class FullAttentionManager(SingleTypeKVCacheManager):
 
     def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
         num_required = (num_tokens + self.block_size - 1) // self.block_size
-        num_held = len(self.req_to_blocks[request_id])
+        # `.get`, not `[...]`. `req_to_blocks` is a defaultdict, so indexing it here
+        # would *insert* an empty entry for a request that is merely being considered
+        # -- and `allocate_slots` calls this before deciding whether the request
+        # fits. Every failed admission would leave a phantom holder behind, and
+        # `get_num_common_prefix_blocks` counts holders, so the common-prefix count
+        # would collapse to zero for the rest of the run. Upstream reads it the same
+        # non-mutating way, for the same reason.
+        num_held = len(self.req_to_blocks.get(request_id, ()))
         return max(0, num_required - num_held)
 
     def allocate_new_blocks(
@@ -133,8 +140,11 @@ class FullAttentionManager(SingleTypeKVCacheManager):
         it only forgoes an optimization.
         """
         num_common_blocks = 0
-        num_holders = len(self.req_to_blocks)
-        for block in self.req_to_blocks[running_request_id]:
+        # Only requests that actually hold blocks count toward the denominator. An
+        # empty entry means a request that asked and did not fit; including it would
+        # make no block's ref_cnt ever equal the holder count.
+        num_holders = sum(1 for blocks in self.req_to_blocks.values() if blocks)
+        for block in self.req_to_blocks.get(running_request_id, ()):
             if block.ref_cnt != num_holders:
                 break
             num_common_blocks += 1

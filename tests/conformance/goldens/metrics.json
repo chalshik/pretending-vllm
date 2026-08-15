@@ -362,7 +362,11 @@
     "type": "histogram"
   },
   {
-    "labels": [],
+    "labels": [
+      "engine",
+      "finished_reason",
+      "model_name"
+    ],
     "name": "vllm:request_success",
     "type": "counter"
   },
