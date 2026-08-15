@@ -1,0 +1,1246 @@
+{
+  "block_allocations": [
+    [
+      0
+    ],
+    [
+      1,
+      2,
+      3
+    ],
+    [
+      4,
+      5,
+      6
+    ],
+    [
+      7
+    ],
+    [
+      8
+    ],
+    [
+      9
+    ],
+    [
+      10
+    ],
+    [
+      11
+    ],
+    [
+      12
+    ],
+    [
+      11,
+      13,
+      14
+    ],
+    [
+      15,
+      16,
+      17
+    ],
+    [
+      12,
+      18
+    ],
+    [
+      19,
+      20,
+      21
+    ],
+    [
+      22,
+      23,
+      24
+    ],
+    [
+      25,
+      26,
+      27
+    ],
+    [
+      28,
+      29,
+      30
+    ],
+    [
+      31,
+      32,
+      33
+    ],
+    [
+      34,
+      35,
+      36
+    ],
+    [
+      37
+    ],
+    [
+      38
+    ],
+    [
+      39
+    ],
+    [
+      37
+    ],
+    [
+      37
+    ]
+  ],
+  "block_frees": [
+    [
+      11,
+      7,
+      0
+    ],
+    [
+      12,
+      8,
+      6,
+      5,
+      4,
+      3,
+      2,
+      1
+    ],
+    [
+      10,
+      9
+    ],
+    [
+      37,
+      18,
+      12,
+      17,
+      16,
+      15,
+      14,
+      13,
+      11
+    ],
+    [
+      37,
+      36,
+      35,
+      34,
+      33,
+      32,
+      31,
+      30,
+      29,
+      28,
+      27,
+      26,
+      25,
+      24,
+      23,
+      22,
+      21,
+      20,
+      19
+    ],
+    [
+      37,
+      39,
+      38
+    ]
+  ],
+  "block_hashes": [
+    "005b167708aaaa87eb3685d9596a7648a643c5040bb7fb5469c86d61ce57ea5900000000",
+    "0282659bb4c9a08b0574b255c68f64de4f27065ba063b6de0f03d50c1430d5dd00000000",
+    "215c2cf33ef7cefadd832b925d75b06d00ee64f99da5593f499df9ee5b053f2600000000",
+    "21adea099f7e43968bc254848840bc5cce1b37e1760b852fca2ff4576407231b00000000",
+    "2c0f733ebbb07f80fa7d798a3ee39be5f894dba474bb4c9a24ce6148ac787bdc00000000",
+    "2c21ce49dc0143223a34b96248ac8baceb1ed7baf12e7e9eba5899ed9c4ad83000000000",
+    "4038b2bd4aa07b97f75bde693c7af69fbb0ad4cc868be72d1a806569f8c8e62c00000000",
+    "4ad1c3d0a7307c965346913c4fb6f501fa0888722e75e50c34545d06c1c4585600000000",
+    "5321d24da932aa593112659537dbd8a1df2c3afab0d707f413c3f238dfac105100000000",
+    "5d3911f56d25220c89d2bac84c6ef571179c9c78a240901c3ef2b61994a210cb00000000",
+    "5f79d65c963a7690ab9bf3668394887b6fc98b2869ec01ba9c1c43012be9f62900000000",
+    "6847849751f737b8265bd4e16bd3893f7b97b7e3a68e78abf94047235cab3a5000000000",
+    "6bc23bc41ca210599738add9520bfa6678be6d52a912e4a29935ff7bed4880bb00000000",
+    "6d5182d720c644790be49799a4cf59053882e9441c814a5520ee6177853bf07a00000000",
+    "6f9485d19b023736ad6584e60851c26c4a58ed4fbf30c5c933fd5a91cff2b12100000000",
+    "79195a55f2fcf497f83cb8d2420337df16f4b70cd33f185ae9a581c0a157425c00000000",
+    "80b33a3858bb5ed77f090a6b2399d7e915303e681cea765aff79ad31e867dd7000000000",
+    "86fd309797ed7161ac868ae5ad0b880fd06a5a766374ca86f0146ec9fc1fe00600000000",
+    "8bda2f203ee2c5f03d19e5b2a12c2a04fa17bf0ca19215e50df7d1bc4288537400000000",
+    "99405725e1ed08d5569862f65bab70b29ec0f3da8cfdf06f10396f5586fba07b00000000",
+    "9f97a32a48e36605608363a081769c5a69283b8b670e17dbc8e53083bbb8515b00000000",
+    "a114cdf194dc498516f1a9a437cb173d8a6d93579a043e12e5dac0dfdd85ca7b00000000",
+    "a571e0736db0dad7a2f93dbbeaea65c3b66a1461e77ba45ea437bc675a1034f800000000",
+    "a66e180b7921b987a0c86d8c3d219f4e35361c18c11cb10c597ee92fbb52390400000000",
+    "a82c956a3affa2d032d996fc2a9ed9634fd40bf052daf84667201329907524e300000000",
+    "ace062c09bfad614d9136fc7b202df442a866604010fa6fd8d36f0f932f5331700000000",
+    "c86a1737862b2a01209d39f47851dbbb6f0b159ebabb886680f558015627b51700000000",
+    "ccc1ceb523397d61be6fcdb4b0c8a9b793df09e04d22ce77e3dbd070ad70778e00000000",
+    "ce7ad3fd76e980fc777c066328e2c68a8757b757c21179ead254c03e5bdd666c00000000",
+    "d41da6293ddd69c3dadbc8bee6453be0c0e1c470a7379dcfff0cc0ae0e121a8b00000000",
+    "d7b898d776a6673fe8b7f9be17f7fa6095cfd6c1ef4e19ff325e86da4e468b3f00000000",
+    "e04414aaec956346f41fd64a6ada9999de06cc5357349468fab54212a226c91a00000000",
+    "e04af9e52df603db64132b80bb84c37ffb692b5fe0559c16452a9671bf4d5d3200000000",
+    "e25ce6d89d6380c5319d1d84bf469a87cc64e7fb0b439c50450176960c58c30300000000",
+    "e493c9100f088951327c06e5f648001f9ffacef42695c32677580d54554fc2fd00000000",
+    "f03477e7fae5d5c5cc71fe7dd4ebad303beca8da88925f3b60343605b9dd01a000000000",
+    "f67e5067e90d9ac42f0afdac9467d0e3749f1efdfa5b0ced7866d82dda1396e600000000",
+    "fc9b8b492e0ca5bddbbbfc72f438992497cab0c671144339bb15f59487556bfb00000000",
+    "fc9ec3db6589b6a3a456dc2f14511dcb5c10b03bee119a913f36f23c4cc37db200000000"
+  ],
+  "config": {
+    "block_size": 8,
+    "device_card": "tiny-2gb",
+    "disable_log_stats": true,
+    "max_model_len": 256,
+    "max_num_batched_tokens": 24,
+    "max_num_seqs": 3,
+    "num_gpu_blocks_override": 96,
+    "seed": 0
+  },
+  "outputs": {
+    "0": [
+      1014,
+      901,
+      767,
+      664,
+      811,
+      746,
+      738,
+      816,
+      647,
+      682,
+      521,
+      719
+    ],
+    "1": [
+      1013,
+      553,
+      856,
+      673,
+      554,
+      740,
+      782,
+      723,
+      601,
+      1003,
+      906,
+      643
+    ],
+    "2": [
+      957,
+      976,
+      907,
+      760,
+      878,
+      554,
+      936,
+      865,
+      808,
+      866,
+      924,
+      527
+    ],
+    "3": [
+      688,
+      579,
+      886,
+      946,
+      884,
+      985,
+      605,
+      651,
+      835,
+      608,
+      998,
+      749
+    ],
+    "4": [
+      696,
+      544,
+      786,
+      660,
+      753,
+      673,
+      831,
+      861,
+      689,
+      984,
+      810,
+      926
+    ],
+    "5": [
+      547,
+      918,
+      1010,
+      846,
+      945,
+      580,
+      900,
+      721,
+      977,
+      587,
+      934,
+      811
+    ]
+  },
+  "preemptions": {
+    "by_step": {},
+    "total": 0
+  },
+  "prefix_cache": {
+    "evictions": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "queries": 260
+  },
+  "schema_version": 1,
+  "source": "pretending-vllm",
+  "steps": [
+    {
+      "cached_reqs": [],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "0",
+        "1"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "0": 6,
+        "1": 18
+      },
+      "num_waiting": 4,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 54,
+      "resumed_reqs": [],
+      "step": 1,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 23
+      },
+      "num_waiting": 4,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 54,
+      "resumed_reqs": [],
+      "step": 2,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 7
+      },
+      "num_waiting": 4,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 54,
+      "resumed_reqs": [],
+      "step": 3,
+      "total_num_scheduled_tokens": 8,
+      "waiting_req_ids": [
+        "2",
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "2"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 5
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 4,
+      "total_num_scheduled_tokens": 7,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 5,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 6,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 7,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 8,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 9,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 10,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 11,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 59,
+      "resumed_reqs": [],
+      "step": 12,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3",
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [
+        "0"
+      ],
+      "new_reqs": [
+        "3"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "1": 1,
+        "2": 1,
+        "3": 22
+      },
+      "num_waiting": 2,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 117,
+      "resumed_reqs": [],
+      "step": 13,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "1",
+        "2",
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "1": 1,
+        "2": 1,
+        "3": 22
+      },
+      "num_waiting": 2,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 117,
+      "resumed_reqs": [],
+      "step": 14,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "2",
+        "3"
+      ],
+      "finished_req_ids": [
+        "1"
+      ],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "2": 1,
+        "3": 14
+      },
+      "num_waiting": 2,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 117,
+      "resumed_reqs": [],
+      "step": 15,
+      "total_num_scheduled_tokens": 15,
+      "waiting_req_ids": [
+        "4",
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [
+        "2"
+      ],
+      "new_reqs": [
+        "4"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 23
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 16,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 23
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 17,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 23
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 18,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 23
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 19,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 23
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 20,
+      "total_num_scheduled_tokens": 24,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 22
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 254,
+      "resumed_reqs": [],
+      "step": 21,
+      "total_num_scheduled_tokens": 23,
+      "waiting_req_ids": [
+        "5"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "5"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 1,
+        "5": 6
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 22,
+      "total_num_scheduled_tokens": 8,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 23,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 24,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 25,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3",
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "3": 1,
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 26,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [
+        "3"
+      ],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 27,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 28,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 29,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 30,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 31,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "4",
+        "5"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "4": 1,
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 32,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "5"
+      ],
+      "finished_req_ids": [
+        "4"
+      ],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        3
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "5": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 260,
+      "resumed_reqs": [],
+      "step": 33,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    }
+  ],
+  "upstream_version": "0.27.1",
+  "workload": "mixed-lengths"
+}

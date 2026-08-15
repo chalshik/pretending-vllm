@@ -98,4 +98,12 @@ the port coherent.
 3. `python tools/spec_sync.py` -- triages every module whose counterpart moved or vanished.
 4. Diff the Tier A files against their counterparts and port the behavioral changes. Tier A is where
    fidelity is contractual; a silent divergence here breaks C1–C4.
-5. Re-record conformance traces (they carry the pin) and update this file's delta table.
+5. `python tools/capture_golden_trace.py --check` — every conformance workload whose behavior moved
+   fails here, naming the class and the step. **Triage each one before re-recording.** A behavioral
+   change is expected after a pin bump; the point of the check is that you decide which changes were
+   the port and which were bugs, workload by workload.
+6. `python tools/capture_golden_trace.py --force` and
+   `python tools/capture_golden_trace.py --metrics --force` once each difference is accounted for.
+   The goldens embed the pin, so `test_goldens_declare_their_source` fails until they are re-recorded
+   — the suite will not let a stale golden pass under a new pin.
+7. Update this file's delta table.

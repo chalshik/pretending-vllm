@@ -1,0 +1,434 @@
+[
+  {
+    "buckets": [
+      "0.3",
+      "0.5",
+      "0.8",
+      "1.0",
+      "1.5",
+      "2.0",
+      "2.5",
+      "5.0",
+      "10.0",
+      "15.0",
+      "20.0",
+      "30.0",
+      "40.0",
+      "50.0",
+      "60.0",
+      "120.0",
+      "240.0",
+      "480.0",
+      "960.0",
+      "1920.0",
+      "7680.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:e2e_request_latency_seconds",
+    "type": "histogram"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:generation_tokens",
+    "type": "counter"
+  },
+  {
+    "buckets": [
+      "0.01",
+      "0.025",
+      "0.05",
+      "0.075",
+      "0.1",
+      "0.15",
+      "0.2",
+      "0.3",
+      "0.4",
+      "0.5",
+      "0.75",
+      "1.0",
+      "2.5",
+      "5.0",
+      "7.5",
+      "10.0",
+      "20.0",
+      "40.0",
+      "80.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:inter_token_latency_seconds",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "1.0",
+      "8.0",
+      "16.0",
+      "32.0",
+      "64.0",
+      "128.0",
+      "256.0",
+      "512.0",
+      "1024.0",
+      "2048.0",
+      "4096.0",
+      "8192.0",
+      "16384.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:iteration_tokens_total",
+    "type": "histogram"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:kv_cache_usage_perc",
+    "type": "gauge"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:num_preemptions",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:num_requests_running",
+    "type": "gauge"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:num_requests_waiting",
+    "type": "gauge"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:prefix_cache_hits",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:prefix_cache_queries",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:prompt_tokens",
+    "type": "counter"
+  },
+  {
+    "buckets": [
+      "0.3",
+      "0.5",
+      "0.8",
+      "1.0",
+      "1.5",
+      "2.0",
+      "2.5",
+      "5.0",
+      "10.0",
+      "15.0",
+      "20.0",
+      "30.0",
+      "40.0",
+      "50.0",
+      "60.0",
+      "120.0",
+      "240.0",
+      "480.0",
+      "960.0",
+      "1920.0",
+      "7680.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_decode_time_seconds",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "1.0",
+      "2.0",
+      "5.0",
+      "10.0",
+      "20.0",
+      "50.0",
+      "100.0",
+      "200.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_generation_tokens",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "0.3",
+      "0.5",
+      "0.8",
+      "1.0",
+      "1.5",
+      "2.0",
+      "2.5",
+      "5.0",
+      "10.0",
+      "15.0",
+      "20.0",
+      "30.0",
+      "40.0",
+      "50.0",
+      "60.0",
+      "120.0",
+      "240.0",
+      "480.0",
+      "960.0",
+      "1920.0",
+      "7680.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_inference_time_seconds",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "1.0",
+      "2.0",
+      "5.0",
+      "10.0",
+      "20.0",
+      "50.0",
+      "100.0",
+      "200.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_params_max_tokens",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "1.0",
+      "2.0",
+      "5.0",
+      "10.0",
+      "20.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_params_n",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "0.3",
+      "0.5",
+      "0.8",
+      "1.0",
+      "1.5",
+      "2.0",
+      "2.5",
+      "5.0",
+      "10.0",
+      "15.0",
+      "20.0",
+      "30.0",
+      "40.0",
+      "50.0",
+      "60.0",
+      "120.0",
+      "240.0",
+      "480.0",
+      "960.0",
+      "1920.0",
+      "7680.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_prefill_time_seconds",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "1.0",
+      "2.0",
+      "5.0",
+      "10.0",
+      "20.0",
+      "50.0",
+      "100.0",
+      "200.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_prompt_tokens",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "0.3",
+      "0.5",
+      "0.8",
+      "1.0",
+      "1.5",
+      "2.0",
+      "2.5",
+      "5.0",
+      "10.0",
+      "15.0",
+      "20.0",
+      "30.0",
+      "40.0",
+      "50.0",
+      "60.0",
+      "120.0",
+      "240.0",
+      "480.0",
+      "960.0",
+      "1920.0",
+      "7680.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_queue_time_seconds",
+    "type": "histogram"
+  },
+  {
+    "labels": [],
+    "name": "vllm:request_success",
+    "type": "counter"
+  },
+  {
+    "buckets": [
+      "0.01",
+      "0.025",
+      "0.05",
+      "0.075",
+      "0.1",
+      "0.15",
+      "0.2",
+      "0.3",
+      "0.4",
+      "0.5",
+      "0.75",
+      "1.0",
+      "2.5",
+      "5.0",
+      "7.5",
+      "10.0",
+      "20.0",
+      "40.0",
+      "80.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:request_time_per_output_token_seconds",
+    "type": "histogram"
+  },
+  {
+    "buckets": [
+      "0.001",
+      "0.005",
+      "0.01",
+      "0.02",
+      "0.04",
+      "0.06",
+      "0.08",
+      "0.1",
+      "0.25",
+      "0.5",
+      "0.75",
+      "1.0",
+      "2.5",
+      "5.0",
+      "7.5",
+      "10.0",
+      "20.0",
+      "40.0",
+      "80.0",
+      "160.0",
+      "640.0",
+      "2560.0",
+      "+Inf"
+    ],
+    "labels": [
+      "engine",
+      "le",
+      "model_name"
+    ],
+    "name": "vllm:time_to_first_token_seconds",
+    "type": "histogram"
+  }
+]

@@ -1,0 +1,1667 @@
+{
+  "block_allocations": [
+    [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    [
+      6,
+      7
+    ],
+    [
+      8,
+      9,
+      10,
+      11,
+      12,
+      13
+    ],
+    [
+      14,
+      15
+    ],
+    [
+      16
+    ],
+    [
+      17
+    ],
+    [
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    [
+      24,
+      25
+    ],
+    [
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    [
+      31,
+      30,
+      29,
+      28,
+      27,
+      26
+    ],
+    [
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    [
+      31
+    ],
+    [
+      30
+    ],
+    [
+      29
+    ],
+    [
+      28
+    ],
+    [
+      27
+    ],
+    [
+      26
+    ],
+    [
+      27,
+      30,
+      16,
+      7,
+      6,
+      5
+    ],
+    [
+      4,
+      3
+    ],
+    [
+      2
+    ],
+    [
+      1
+    ],
+    [
+      0
+    ],
+    [
+      26
+    ]
+  ],
+  "block_frees": [
+    [
+      31,
+      30,
+      29,
+      28,
+      27,
+      26
+    ],
+    [
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    [
+      31,
+      30,
+      29,
+      28,
+      27,
+      26
+    ],
+    [
+      27,
+      30,
+      16,
+      7,
+      6,
+      5,
+      4,
+      3,
+      2,
+      1,
+      0
+    ],
+    [
+      26,
+      29,
+      17,
+      15,
+      14,
+      13,
+      12,
+      11,
+      10,
+      9,
+      8
+    ],
+    [
+      2,
+      28,
+      31,
+      25,
+      24,
+      23,
+      22,
+      21,
+      20,
+      19,
+      18
+    ],
+    [
+      26,
+      0,
+      1,
+      3,
+      4,
+      5,
+      6,
+      7,
+      16,
+      30,
+      27
+    ]
+  ],
+  "block_hashes": [],
+  "config": {
+    "block_size": 8,
+    "device_card": "tiny-2gb",
+    "disable_log_stats": true,
+    "enable_prefix_caching": false,
+    "max_model_len": 256,
+    "max_num_batched_tokens": 48,
+    "max_num_seqs": 4,
+    "num_gpu_blocks_override": 32,
+    "seed": 0
+  },
+  "outputs": {
+    "0": [
+      1014,
+      901,
+      767,
+      664,
+      811,
+      746,
+      738,
+      816,
+      647,
+      682,
+      521,
+      719,
+      789,
+      530,
+      817,
+      683,
+      607,
+      753,
+      577,
+      942,
+      735,
+      522,
+      953,
+      600
+    ],
+    "1": [
+      1013,
+      553,
+      856,
+      673,
+      554,
+      740,
+      782,
+      723,
+      601,
+      1003,
+      906,
+      643,
+      635,
+      887,
+      793,
+      944,
+      522,
+      596,
+      604,
+      995,
+      763,
+      960,
+      831,
+      634
+    ],
+    "2": [
+      957,
+      976,
+      907,
+      760,
+      878,
+      554,
+      936,
+      865,
+      808,
+      866,
+      924,
+      527,
+      1004,
+      750,
+      771,
+      523,
+      605,
+      608,
+      672,
+      823,
+      709,
+      647,
+      796,
+      740
+    ],
+    "3": [
+      688,
+      579,
+      886,
+      946,
+      884,
+      985,
+      605,
+      651,
+      835,
+      608,
+      998,
+      749,
+      946,
+      903,
+      968,
+      627,
+      986,
+      634,
+      846,
+      856,
+      907,
+      889,
+      868,
+      788
+    ]
+  },
+  "preemptions": {
+    "by_step": {
+      "10": {
+        "3": 2
+      },
+      "12": {
+        "3": 3
+      },
+      "8": {
+        "3": 1
+      }
+    },
+    "total": 3
+  },
+  "prefix_cache": {
+    "evictions": 0,
+    "hit_rate": 0.0,
+    "hits": 0,
+    "queries": 0
+  },
+  "schema_version": 1,
+  "source": "pretending-vllm",
+  "steps": [
+    {
+      "cached_reqs": [],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "0"
+      ],
+      "num_common_prefix_blocks": [
+        6
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "0": 48
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 1,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        8
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "0": 14
+      },
+      "num_waiting": 3,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 2,
+      "total_num_scheduled_tokens": 14,
+      "waiting_req_ids": [
+        "1",
+        "2",
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "1"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 47
+      },
+      "num_waiting": 2,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 3,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": [
+        "2",
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 17
+      },
+      "num_waiting": 2,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 4,
+      "total_num_scheduled_tokens": 18,
+      "waiting_req_ids": [
+        "2",
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "2"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 46
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 5,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 13
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 6,
+      "total_num_scheduled_tokens": 15,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "3"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 0,
+      "num_running": 4,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1,
+        "3": 45
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 7,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 1,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [
+        "3"
+      ],
+      "preemptions": {
+        "3": 1
+      },
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 8,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "3"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 1,
+      "num_running": 4,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1,
+        "3": 45
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 9,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 2,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [
+        "3"
+      ],
+      "preemptions": {
+        "3": 2
+      },
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 10,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [
+        "3"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 2,
+      "num_running": 4,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1,
+        "3": 45
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 11,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [
+        "3"
+      ],
+      "preemptions": {
+        "3": 3
+      },
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 12,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 13,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 14,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 15,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 16,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 17,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 18,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 19,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 20,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 21,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 22,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 23,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 24,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "0",
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "0": 1,
+        "1": 1,
+        "2": 1
+      },
+      "num_waiting": 1,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 25,
+      "total_num_scheduled_tokens": 3,
+      "waiting_req_ids": [
+        "3"
+      ]
+    },
+    {
+      "cached_reqs": [
+        "1",
+        "2"
+      ],
+      "finished_req_ids": [
+        "0"
+      ],
+      "new_reqs": [
+        "3"
+      ],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "1": 1,
+        "2": 1,
+        "3": 46
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 26,
+      "total_num_scheduled_tokens": 48,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "1",
+        "2",
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 3,
+      "num_scheduled_tokens": {
+        "1": 1,
+        "2": 1,
+        "3": 16
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 27,
+      "total_num_scheduled_tokens": 18,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "2",
+        "3"
+      ],
+      "finished_req_ids": [
+        "1"
+      ],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "2": 1,
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 28,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "2",
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        0
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 2,
+      "num_scheduled_tokens": {
+        "2": 1,
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 29,
+      "total_num_scheduled_tokens": 2,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [
+        "2"
+      ],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 30,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 31,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 32,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 33,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 34,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 35,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 36,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        9
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 37,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 38,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 39,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 40,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 41,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 42,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 43,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 44,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        10
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 45,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        11
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 46,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        11
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 47,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        11
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 48,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        11
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 49,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    },
+    {
+      "cached_reqs": [
+        "3"
+      ],
+      "finished_req_ids": [],
+      "new_reqs": [],
+      "num_common_prefix_blocks": [
+        11
+      ],
+      "num_preemptions_total": 3,
+      "num_running": 1,
+      "num_scheduled_tokens": {
+        "3": 1
+      },
+      "num_waiting": 0,
+      "preempted_req_ids": [],
+      "prefix_cache_hits": 0,
+      "prefix_cache_queries": 0,
+      "resumed_reqs": [],
+      "step": 50,
+      "total_num_scheduled_tokens": 1,
+      "waiting_req_ids": []
+    }
+  ],
+  "upstream_version": "0.27.1",
+  "workload": "preemption"
+}

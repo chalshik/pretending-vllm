@@ -63,3 +63,12 @@ jobs:
       # R21.5: the whole suite must stay under 30s on a laptop.
       - name: Test
         run: uv run pytest -q --durations=10
+
+      # Redundant with tests/conformance/ by design. The suite compares a fresh
+      # recording to the goldens; this asserts the *tool* that writes them still
+      # produces what is checked in, so a broken recorder cannot quietly make
+      # future re-recordings wrong while the existing goldens keep passing.
+      - name: Conformance goldens are current
+        run: |
+          uv run python tools/capture_golden_trace.py --check
+          uv run python tools/capture_golden_trace.py --metrics

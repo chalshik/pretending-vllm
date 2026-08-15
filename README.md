@@ -129,6 +129,26 @@ when hardware time becomes available. Read this section as design intent, not as
 
 **Not modeled at all:** generated text quality; logprob *values* (schema and shape only).
 
+### How the contract is checked
+
+`tests/conformance/` runs four workloads — mixed lengths, a shared prefix, a starved block budget
+that forces preemption, and a prompt long enough to chunk — and compares each against a recorded
+golden. C5–C7 are schema checks rather than recordings.
+
+The recordings carry **decisions only**: which requests were scheduled, how many tokens each got,
+which blocks were allocated and freed in what order, the cache hit rate, which request was preempted
+and when. No timestamps, no durations. That separation is deliberate — latency is approximate by
+construction, and if a cost-model recalibration failed the conformance suite, the goldens would get
+regenerated reflexively and stop catching anything.
+
+```bash
+python tools/capture_golden_trace.py --check
+```
+
+To promote the contract from `asserted` to `verified`, run the same four workloads against real vLLM
+at the pin and replace the goldens; the tests do not change. The recorder attaches to upstream's
+`BlockPool` unchanged, and `tools/capture_golden_trace.py` documents the procedure.
+
 ### The latency numbers are modeled, not measured
 
 The cost model is a roofline approximation — a compute term, a memory term, and overheads, with a
