@@ -44,6 +44,9 @@ class NewRequestData:
     block_ids: tuple[list[int], ...]
     num_computed_tokens: int
     lora_request: Any = None
+    #: R2.2. Set instead of `sampling_params` for an embedding request. The runner
+    #: needs it to know the vector's width, and that a request will never sample.
+    pooling_params: Any = None
 
     #: R5.5 + R19.2. Prompt *plus* everything generated so far. Upstream carries
     #: the same field for the same reason: the V2 runner rebuilds a resumed
@@ -66,6 +69,7 @@ class NewRequestData:
             block_ids=block_ids,
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
+            pooling_params=request.pooling_params,
         )
 
     def __repr__(self) -> str:

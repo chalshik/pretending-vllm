@@ -18,6 +18,7 @@ from typing import Any
 
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
+from pvllm.pooling_params import PoolingParams
 from pvllm.sampling_params import SamplingParams
 from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine import EngineCoreRequest
@@ -39,13 +40,14 @@ class InputProcessor:
         self,
         request_id: str,
         prompt: str | list[int],
-        sampling_params: SamplingParams,
+        sampling_params: SamplingParams | None = None,
         *,
         client_index: int = 0,
         priority: int = 0,
         cache_salt: str | None = None,
         lora_request: Any = None,
         mm_features: list[Any] | None = None,
+        pooling_params: PoolingParams | None = None,
     ) -> EngineCoreRequest:
         """Build the wire request. R3.1.
 
@@ -59,11 +61,20 @@ class InputProcessor:
         else:
             prompt_token_ids = list(prompt)
 
-        self._validate_params(sampling_params)
-        self._validate_prompt_length(request_id, prompt_token_ids, sampling_params)
+        if (sampling_params is None) == (pooling_params is None):
+            raise ValueError(
+                "exactly one of sampling_params and pooling_params must be given"
+            )
 
-        # Bind the tokenizer's EOS, honouring ignore_eos by leaving it unset.
-        sampling_params.update_from_tokenizer(self.tokenizer.eos_token_id)
+        if sampling_params is not None:
+            self._validate_params(sampling_params)
+            self._validate_prompt_length(request_id, prompt_token_ids, sampling_params)
+            # Bind the tokenizer's EOS, honouring ignore_eos by leaving it unset.
+            sampling_params.update_from_tokenizer(self.tokenizer.eos_token_id)
+        else:
+            # R2.2. A pooling request generates nothing, so the length check is the
+            # prompt against the context window rather than prompt plus output.
+            self._validate_pooling_prompt_length(request_id, prompt_token_ids)
 
         if lora_request is not None and self.vllm_config.lora_config is None:
             # R16.1. Accepting it would give the adapter a prefix-cache partition and
@@ -86,7 +97,21 @@ class InputProcessor:
             priority=priority,
             lora_request=lora_request,
             mm_features=list(mm_features or ()),
+            pooling_params=pooling_params,
         )
+
+    def _validate_pooling_prompt_length(
+        self, request_id: str, prompt_token_ids: list[int]
+    ) -> None:
+        """R2.5 for pooling: the prompt alone must fit the context window."""
+        max_model_len = self.model_config.max_model_len
+        assert max_model_len is not None
+        if len(prompt_token_ids) > max_model_len:
+            raise ValueError(
+                f"This model's maximum context length is {max_model_len} tokens. "
+                f"However, you requested {len(prompt_token_ids)} tokens in the input "
+                f"for embedding generation. Please reduce the length of the input."
+            )
 
     def _validate_params(self, sampling_params: SamplingParams) -> None:
         """R2.5: error parity for unsupported sampling parameters."""

@@ -35,6 +35,7 @@ from pvllm.v1.engine import (
 from pvllm.v1.utils import ConstantList
 
 if TYPE_CHECKING:
+    from pvllm.pooling_params import PoolingParams
     from pvllm.sampling_params import SamplingParams
     from pvllm.v1.core.kv_cache_utils import BlockHash
 
@@ -102,6 +103,7 @@ class Request:
         trace_headers: Mapping[str, str] | None = None,
         block_hasher: Callable[[Request], list[BlockHash]] | None = None,
         mm_features: list[Any] | None = None,
+        pooling_params: PoolingParams | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -115,14 +117,25 @@ class Request:
         self.stop_reason: int | str | None = None
         self.kv_transfer_params: dict[str, Any] | None = None
 
-        if sampling_params is None:
-            raise ValueError("sampling_params must be set")
-        if sampling_params.max_tokens is None:
+        # R2.2. A pooling request prefills and stops: it generates nothing, so it
+        # has no sampling params and no `max_tokens`. Everything else about it --
+        # queueing, block allocation, prefix caching, chunked prefill -- is the
+        # ordinary path, which is the point of modelling it at all.
+        self.pooling_params = pooling_params
+        if (sampling_params is None) == (pooling_params is None):
+            raise ValueError(
+                "exactly one of sampling_params and pooling_params must be set"
+            )
+        if sampling_params is not None and sampling_params.max_tokens is None:
             raise ValueError(
                 "sampling_params.max_tokens must be resolved before a Request is "
                 "built; the processor resolves it against max_model_len"
             )
-        self.max_tokens: int = sampling_params.max_tokens
+        self.max_tokens: int = (
+            sampling_params.max_tokens
+            if sampling_params is not None and sampling_params.max_tokens is not None
+            else 0
+        )
 
         self.prompt_token_ids = prompt_token_ids or []
         self.num_prompt_tokens = len(self.prompt_token_ids)
@@ -139,8 +152,10 @@ class Request:
         # overwhelmingly common request.
         from pvllm.v1.structured_output.request import StructuredOutputRequest
 
-        self.structured_output_request = StructuredOutputRequest.from_sampling_params(
-            sampling_params
+        self.structured_output_request = (
+            StructuredOutputRequest.from_sampling_params(sampling_params)
+            if sampling_params is not None
+            else None
         )
         if self.structured_output_request is not None:
             # Admission is blocked until the grammar compiles. Set here rather than
@@ -186,6 +201,7 @@ class Request:
             request_id=request.request_id,
             prompt_token_ids=request.prompt_token_ids,
             sampling_params=request.sampling_params,
+            pooling_params=request.pooling_params,
             arrival_time=(
                 request.arrival_time
                 if request.arrival_time is not None
@@ -251,6 +267,11 @@ class Request:
     @property
     def use_structured_output(self) -> bool:
         return self.structured_output_request is not None
+
+    @property
+    def use_pooling(self) -> bool:
+        """R2.2. Whether this request returns a vector rather than tokens."""
+        return self.pooling_params is not None
 
     # --- lifecycle -----------------------------------------------------------
 

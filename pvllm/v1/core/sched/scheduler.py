@@ -780,7 +780,22 @@ class Scheduler:
 
             new_token_ids: list[int] = []
             stopped = False
-            if generated:
+            pooling_output: list[float] | None = None
+
+            if request.use_pooling:
+                # R2.2. A pooling request has no decode phase: it is finished the
+                # moment its whole prompt is computed. Under chunked prefill that
+                # can be several steps after it was first scheduled, and the vector
+                # only exists on the last of them.
+                index = model_runner_output.req_id_to_index.get(req_id)
+                outputs_by_index = model_runner_output.pooler_output or []
+                if index is not None and index < len(outputs_by_index):
+                    pooling_output = outputs_by_index[index]
+                if pooling_output is not None:
+                    request.status = RequestStatus.FINISHED_STOPPED
+                    stopped = True
+
+            if generated and not request.use_pooling:
                 # A request still being prefilled gets no tokens back; the runner
                 # only samples once the whole prompt is computed.
                 new_token_ids, stopped = self._update_request_with_output(
@@ -801,6 +816,7 @@ class Scheduler:
                         stop_reason=request.stop_reason,
                         events=request.take_events(),
                         num_cached_tokens=request.num_cached_tokens,
+                        pooling_output=pooling_output,
                     )
                 )
 

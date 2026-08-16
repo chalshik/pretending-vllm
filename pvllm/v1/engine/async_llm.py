@@ -29,7 +29,8 @@ from pvllm import envs
 from pvllm.config import VllmConfig
 from pvllm.engine.arg_utils import AsyncEngineArgs
 from pvllm.logger import init_logger
-from pvllm.outputs import RequestOutput
+from pvllm.outputs import PoolingRequestOutput, RequestOutput
+from pvllm.pooling_params import PoolingParams
 from pvllm.sampling_params import SamplingParams
 from pvllm.tokenizers import get_tokenizer
 from pvllm.tokenizers.protocol import TokenizerLike
@@ -74,7 +75,9 @@ class AsyncLLM:
             log_stats=log_stats,
         )
 
-        self._queues: dict[str, asyncio.Queue[RequestOutput | BaseException]] = {}
+        self._queues: dict[
+            str, asyncio.Queue[RequestOutput | PoolingRequestOutput | BaseException]
+        ] = {}
         self._output_handler: asyncio.Task[None] | None = None
         #: Accumulated since the last drain. `/metrics` takes and clears it, so a
         #: histogram observation is recorded exactly once however often it scrapes.
@@ -151,7 +154,9 @@ class AsyncLLM:
         if self.errored:
             raise EngineDeadError(str(self._dead_error))
 
-        queue: asyncio.Queue[RequestOutput | BaseException] = asyncio.Queue()
+        queue: asyncio.Queue[RequestOutput | PoolingRequestOutput | BaseException] = (
+            asyncio.Queue()
+        )
         self._queues[request_id] = queue
         #: The engine ids to abort if the consumer goes away. Equal to `[request_id]`
         #: unless `n > 1`, where the client's id names no engine request at all.
@@ -197,6 +202,7 @@ class AsyncLLM:
                 item = await queue.get()
                 if isinstance(item, BaseException):
                     raise item
+                assert isinstance(item, RequestOutput)
                 yield item
                 if item.finished:
                     return
@@ -213,6 +219,59 @@ class AsyncLLM:
             if live:
                 self.engine_core.abort_requests(live)
                 self.output_processor.abort_requests(live)
+
+    async def encode(
+        self,
+        prompt: str | list[int],
+        pooling_params: PoolingParams,
+        request_id: str,
+        priority: int = 0,
+    ) -> AsyncGenerator[PoolingRequestOutput, None]:
+        """Yield one pooling output and finish. R2.2.
+
+        A generator rather than a coroutine because that is upstream's shape, and
+        because it makes cancellation work the same way `generate` does: dropping the
+        consumer aborts the request in the core.
+        """
+        if self.errored:
+            raise EngineDeadError(str(self._dead_error))
+
+        queue: asyncio.Queue[RequestOutput | PoolingRequestOutput | BaseException] = (
+            asyncio.Queue()
+        )
+        self._queues[request_id] = queue
+
+        try:
+            engine_request = self.input_processor.process_inputs(
+                request_id,
+                prompt,
+                priority=priority,
+                pooling_params=pooling_params,
+            )
+            self.engine_core.add_request(engine_request)
+            self.output_processor.add_request(
+                request_id=request_id,
+                prompt=prompt if isinstance(prompt, str) else None,
+                prompt_token_ids=engine_request.prompt_token_ids or [],
+                sampling_params=None,
+                arrival_time=self.engine_core.clock_time,
+                pooling_params=pooling_params,
+            )
+            self._ensure_output_handler()
+
+            while True:
+                item = await queue.get()
+                if isinstance(item, BaseException):
+                    raise item
+                assert isinstance(item, PoolingRequestOutput)
+                yield item
+                if item.finished:
+                    return
+        finally:
+            self._queues.pop(request_id, None)
+            if request_id in self.output_processor.request_states:
+                self.engine_core.abort_requests([request_id])
+                self.output_processor.abort_requests([request_id])
 
     async def abort(self, request_id: str) -> None:
         self.engine_core.abort_requests([request_id])

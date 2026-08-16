@@ -59,6 +59,9 @@ class ModelRunnerOutput:
     #: KV connector transfer completions (R17).
     finished_sending: set[str] | None = None
     finished_recving: set[str] | None = None
+    #: R2.2. One vector per request that pooled this step, `None` for the rest.
+    #: Indexed by `req_id_to_index`, like `sampled_token_ids`.
+    pooler_output: list[list[float] | None] | None = None
     #: How long the modeled step took, in seconds. Feeds the clock and the metrics,
     #: and is labeled `modeled` wherever it surfaces (R9.5).
     modeled_duration: float = 0.0

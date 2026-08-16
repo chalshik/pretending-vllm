@@ -33,6 +33,8 @@ from pvllm.entrypoints.openai.models.serving import (
     OpenAIServingModels,
     build_lora_modules,
 )
+from pvllm.entrypoints.pooling.embed.protocol import EmbeddingRequest
+from pvllm.entrypoints.pooling.embed.serving import OpenAIServingEmbedding
 from pvllm.entrypoints.serve.tokenize.serving import (
     DetokenizeRequest,
     OpenAIServingTokenization,
@@ -65,6 +67,7 @@ class ServerState:
         created = int(self.engine.engine_core.clock_time)
         self.completion = OpenAIServingCompletion(self.engine, self.served_model_names)
         self.chat = OpenAIServingChat(self.engine, self.served_model_names)
+        self.embedding = OpenAIServingEmbedding(self.engine, self.served_model_names)
         # R16.1. `--lora-modules name=path`, resolved once. Each adapter gets a
         # stable integer id: the id partitions the prefix cache, so it must not
         # change between requests naming the same adapter.
@@ -79,6 +82,7 @@ class ServerState:
         )
         self.completion.models = self.models
         self.chat.models = self.models
+        self.embedding.models = self.models
         self.tokenization = OpenAIServingTokenization(
             self.engine.tokenizer, model_config.max_model_len
         )
@@ -182,6 +186,14 @@ def build_app(
         if isinstance(result, AsyncIterator):
             return StreamingResponse(result, media_type="text/event-stream")
         return result
+
+    @app.post("/v1/embeddings")
+    async def create_embedding(request: EmbeddingRequest, raw_request: Request) -> Any:
+        """R2.2. The vectors are synthetic; see `pvllm/pooling_params.py`."""
+        try:
+            return await state.embedding.create_embedding(request, raw_request)
+        except Exception as exc:
+            return to_error_response(exc)
 
     @app.get("/v1/models")
     async def show_available_models() -> Any:

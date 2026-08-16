@@ -138,7 +138,9 @@ def test_unresolved_max_tokens_is_rejected():
 
 
 def test_missing_sampling_params_is_rejected():
-    with pytest.raises(ValueError, match="sampling_params must be set"):
+    with pytest.raises(
+        ValueError, match="exactly one of sampling_params and pooling_params"
+    ):
         Request("r", [1], None, arrival_time=0.0)
 
 

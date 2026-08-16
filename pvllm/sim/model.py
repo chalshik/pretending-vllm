@@ -24,6 +24,8 @@ simulator slower than the thing it simulates.
 
 from __future__ import annotations
 
+import hashlib
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -305,6 +307,38 @@ class SimModel:
         # The sampled token is rank 0 by construction, matching what a sampler
         # without temperature perturbation would report.
         return token_ids[:k], logprobs[:k], 0
+
+    def embed(self, prompt_token_ids: list[int], dimensions: int) -> list[float]:
+        """A pooling request's vector. R2.2.
+
+        Derived from the prompt tokens and normalized, so two identical prompts give
+        identical vectors and two different prompts give different ones -- which is
+        what a product's caching, plumbing and dedup logic actually depend on.
+
+        It carries no semantic information. Cosine similarity between two of these
+        says nothing about whether the texts are related, because there is no model
+        here to say so (NG3). Anything evaluating retrieval quality against these
+        numbers is measuring a hash function.
+
+        Not drawn from a stream: derived from the content, because a pooling model's
+        output depends on its input and nothing else. The same prompt embedded twice
+        in one process, or across two runs, must produce the same vector.
+        """
+        digest = hashlib.sha256(
+            b"embed"
+            + b"".join(token.to_bytes(4, "little") for token in prompt_token_ids)
+        ).digest()
+        # A counter-mode expansion of the digest, so the vector is as long as asked
+        # for without the seed material repeating.
+        raw: list[float] = []
+        counter = 0
+        while len(raw) < dimensions:
+            block = hashlib.sha256(digest + counter.to_bytes(4, "little")).digest()
+            raw.extend(value / 255.0 - 0.5 for value in block)
+            counter += 1
+        vector = raw[:dimensions]
+        norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+        return [value / norm for value in vector]
 
     def forget_request(self, request_id: str) -> None:
         """Drop a finished request's cached state. R15, R11.2.

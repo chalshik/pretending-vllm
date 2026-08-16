@@ -14,7 +14,8 @@ from typing import Any
 
 from pvllm.engine.arg_utils import EngineArgs
 from pvllm.logger import init_logger
-from pvllm.outputs import RequestOutput
+from pvllm.outputs import PoolingRequestOutput, RequestOutput
+from pvllm.pooling_params import PoolingParams
 from pvllm.sampling_params import SamplingParams
 from pvllm.v1.engine.llm_engine import LLMEngine
 
@@ -97,10 +98,45 @@ class LLM:
         while self.llm_engine.has_unfinished_requests():
             for output in self.llm_engine.step():
                 if output.finished:
+                    assert isinstance(output, RequestOutput)
                     finished[output.request_id] = output
 
         # Returned in submission order, not completion order, so results line up
         # with the prompts the caller passed.
+        return [finished[request_id] for request_id in request_ids]
+
+    def embed(
+        self,
+        prompts: str | Sequence[str] | Sequence[list[int]],
+        pooling_params: PoolingParams | None = None,
+    ) -> list[PoolingRequestOutput]:
+        """Embed prompts. R2.2.
+
+        The vectors are synthetic and carry no meaning -- see
+        `pvllm/pooling_params.py`. The scheduling, batching and prefix-cache
+        behaviour around them is real, which is what makes an embedding workload's
+        capacity answer worth having.
+        """
+        if isinstance(prompts, str):
+            prompts = [prompts]
+        prompt_list: list[str | list[int]] = [
+            item if isinstance(item, str) else list(item) for item in prompts
+        ]
+        params = pooling_params or PoolingParams(task="embed")
+
+        request_ids: list[str] = []
+        for prompt in prompt_list:
+            request_id = str(self._request_counter)
+            self._request_counter += 1
+            request_ids.append(request_id)
+            self.llm_engine.add_request(request_id, prompt, pooling_params=params)
+
+        finished: dict[str, PoolingRequestOutput] = {}
+        while self.llm_engine.has_unfinished_requests():
+            for output in self.llm_engine.step():
+                if output.finished:
+                    assert isinstance(output, PoolingRequestOutput)
+                    finished[output.request_id] = output
         return [finished[request_id] for request_id in request_ids]
 
     def chat(

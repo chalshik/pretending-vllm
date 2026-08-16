@@ -88,6 +88,10 @@ class SimModelRunner:
         self.kv_cache_config: KVCacheConfig | None = None
         self.captured_sizes: frozenset[int] = frozenset()
 
+        #: R2.2. Pooling requests in flight: `req_id -> (dimensions, prompt tokens)`.
+        #: Empty for a generation-only deployment, which is the common case.
+        self.pooling_requests: dict[str, tuple[int, list[int]]] = {}
+
         #: R18.1. Encoder outputs resident on this device, by mm hash. The scheduler
         #: decides *whether* to encode and how much room there is; this is what is
         #: actually being held, and the two must agree -- which is the only way the
@@ -166,6 +170,15 @@ class SimModelRunner:
             # scheduler sends input *ids*, and their sizes live on the request.
             if new_req.mm_features:
                 self.req_states.mm_features[new_req.req_id] = list(new_req.mm_features)
+            # R2.2. A pooling request never samples; it produces one vector on the
+            # step its prefill completes. Kept by id because that is the only thing
+            # `sample_tokens` gets back from the batch.
+            if new_req.pooling_params is not None:
+                self.pooling_requests[new_req.req_id] = (
+                    new_req.pooling_params.dimensions
+                    or self.sim_model.model.hidden_size,
+                    list(prompt_token_ids),
+                )
 
     def _maybe_set_constraint(self, req_id: str, sampling_params: Any) -> None:
         """Hand a constrained request's grammar to the model. R15."""
@@ -218,6 +231,7 @@ class SimModelRunner:
             # process -- and hand a reused id the previous request's answer.
             self.sim_model.forget_request(req_id)
             self.req_states.mm_features.pop(req_id, None)
+            self.pooling_requests.pop(req_id, None)
             req_idx = self.req_states.remove_request(req_id)
             if req_idx is not None:
                 self.block_tables.clear(req_idx)
@@ -459,9 +473,34 @@ class SimModelRunner:
             else {}
         )
 
+        # R2.2. One vector per pooling request whose prompt finished this step. A
+        # pooling request is *always* "prefilling" as far as the batch is concerned
+        # -- it never generates -- so it is never in `sampling_indices` and the two
+        # paths cannot interfere.
+        pooler_output: list[list[float] | None] | None = None
+        if self.pooling_requests:
+            pooler_output = [None] * len(req_ids)
+            for pool_idx, pool_req_id in enumerate(req_ids):
+                pooling = self.pooling_requests.get(pool_req_id)
+                if pooling is None:
+                    continue
+                slot = int(input_batch.idx_mapping_np[pool_idx])
+                if int(input_batch.seq_lens_np[pool_idx]) < int(
+                    self.req_states.prompt_len[slot]
+                ):
+                    # Chunked prefill: the prompt is not all in yet, so there is
+                    # nothing to pool over.
+                    continue
+                dimensions, prompt_token_ids = pooling
+                pooler_output[pool_idx] = self.sim_model.embed(
+                    prompt_token_ids, dimensions
+                )
+
         sampling_indices = np.flatnonzero(~input_batch.is_prefilling_np)
         for batch_idx in sampling_indices:
             req_id = req_ids[int(batch_idx)]
+            if req_id in self.pooling_requests:
+                continue
             req_idx = int(input_batch.idx_mapping_np[batch_idx])
             position = int(self.req_states.num_output_tokens[req_idx])
             max_tokens = max(
@@ -489,6 +528,7 @@ class SimModelRunner:
             sampled_token_ids=sampled,
             logprobs=logprobs,
             spec_token_ids=drafts if self.num_spec_tokens else None,
+            pooler_output=pooler_output,
         )
 
     def postprocess_num_computed_tokens(self, input_batch: InputBatch) -> None:

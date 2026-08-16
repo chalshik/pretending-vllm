@@ -15,7 +15,8 @@ from pvllm import envs
 from pvllm.config import VllmConfig
 from pvllm.engine.arg_utils import EngineArgs
 from pvllm.logger import init_logger
-from pvllm.outputs import RequestOutput
+from pvllm.outputs import PoolingRequestOutput, RequestOutput
+from pvllm.pooling_params import PoolingParams
 from pvllm.sampling_params import SamplingParams
 from pvllm.tokenizers import get_tokenizer
 from pvllm.tokenizers.protocol import TokenizerLike
@@ -68,11 +69,33 @@ class LLMEngine:
         self,
         request_id: str,
         prompt: str | list[int],
-        sampling_params: SamplingParams,
+        sampling_params: SamplingParams | None = None,
         priority: int = 0,
         lora_request: Any = None,
         mm_features: list[Any] | None = None,
+        pooling_params: PoolingParams | None = None,
     ) -> None:
+        if pooling_params is not None:
+            # R2.2. No fan-out and no sampling: an embedding request prefills once
+            # and returns a vector.
+            engine_request = self.input_processor.process_inputs(
+                request_id, prompt, priority=priority, pooling_params=pooling_params
+            )
+            self.engine_core.add_request(engine_request)
+            self.output_processor.add_request(
+                request_id=request_id,
+                prompt=prompt if isinstance(prompt, str) else None,
+                prompt_token_ids=engine_request.prompt_token_ids or [],
+                sampling_params=None,
+                arrival_time=self.engine_core.clock_time,
+                pooling_params=pooling_params,
+            )
+            return
+
+        assert sampling_params is not None, (
+            "add_request needs one of sampling_params or pooling_params"
+        )
+
         # R11.7. `n > 1` fans out here, in the frontend, exactly as upstream does:
         # the engine core has no notion of `n`, and four completions of one prompt
         # are four requests that share a prompt. They queue, preempt, and share KV
@@ -113,7 +136,7 @@ class LLMEngine:
         self.engine_core.abort_requests(request_ids)
         self.output_processor.abort_requests(request_ids)
 
-    def step(self) -> list[RequestOutput]:
+    def step(self) -> list[RequestOutput | PoolingRequestOutput]:
         """Run one engine step and return whatever finished or advanced."""
         engine_core_outputs = self.engine_core.get_output()
         if not engine_core_outputs:
@@ -127,7 +150,7 @@ class LLMEngine:
         now = self.engine_core.clock_time
         iteration_stats = IterationStats()
 
-        outputs: list[RequestOutput] = []
+        outputs: list[RequestOutput | PoolingRequestOutput] = []
         for client_outputs in engine_core_outputs.values():
             outputs.extend(
                 self.output_processor.process_outputs(

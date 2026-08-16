@@ -123,6 +123,28 @@ async def test_streaming_chunks_match_the_streaming_schema(client):
     assert response.text.rstrip().endswith("data: [DONE]")
 
 
+async def test_embedding_response_carries_every_required_field(client):
+    """C5. R2.2. The vectors are synthetic; the envelope around them is the contract
+    an embedding client is written against."""
+    body = (
+        await client.post(
+            "/v1/embeddings", json={"model": MODEL, "input": ["one", "two"]}
+        )
+    ).json()
+    assert set(body) >= {"id", "object", "created", "model", "data", "usage"}
+    assert body["object"] == "list"
+    for index, item in enumerate(body["data"]):
+        assert set(item) == {"index", "object", "embedding"}
+        assert item["index"] == index
+        assert item["object"] == "embedding"
+        assert item["embedding"] and all(
+            isinstance(value, float) for value in item["embedding"]
+        )
+    # An embedding request generates nothing, so OpenAI's usage block for it has no
+    # completion_tokens -- a client summing usage across endpoints depends on that.
+    assert set(body["usage"]) == {"prompt_tokens", "total_tokens"}
+
+
 async def test_models_endpoint_matches_the_list_schema(client):
     body = (await client.get("/v1/models")).json()
     assert body["object"] == "list"

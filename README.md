@@ -14,8 +14,8 @@ See [UPSTREAM.md](UPSTREAM.md).
 > `AsyncLLM`, `/metrics`, prefix caching, chunked prefill, preemption, the debug surface (JSONL
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
-> parallelism, speculative decoding, sliding-window attention, multimodal, and KV
-> disaggregation all work. Mixed full/windowed models, data and expert
+> parallelism, speculative decoding, sliding-window attention, multimodal, KV
+> disaggregation, `n > 1`, and `/v1/embeddings` all work. Mixed full/windowed models, data and expert
 > parallelism, real KV transports, and a KV connector paired with a sliding window are not
 > implemented and refuse by name.
 
@@ -164,6 +164,7 @@ observable rather than approximated.
 | `--lora-modules name=path` | each adapter is served under its own model name: `/v1/models` lists it, and a request naming it routes to it |
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
 | `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
+| `/v1/embeddings` | each document is its own request: prefill and stop, no decode — so a page of them batches, queues, and shares a preamble through the prefix cache |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
 | an `image_url` content part | 256 placeholder tokens, a separate encoder budget, an encoder pass priced at ViT-L scale, and a cache the second request with the same image hits |
 | a KV connector | a second engine pulls a published prefix instead of recomputing it; both sides pay — the producer for its writes, the consumer for its reads — so `kv_role` and your store's bandwidth decide whether it wins against recomputing |
@@ -222,7 +223,11 @@ when hardware time becomes available. Read this section as design intent, not as
 **Analytic, exact given the model card and device card:** memory footprint, derived
 `num_gpu_blocks`, `max_concurrency`.
 
-**Not modeled at all:** generated text quality; logprob *values* (schema and shape only).
+**Not modeled at all:** generated text quality; logprob *values* (schema and shape only); embedding
+*vectors* — `/v1/embeddings` returns a normalized vector derived from the prompt's tokens, so the
+same text always embeds the same and different text embeds differently, which is what caching and
+dedup logic depend on. Cosine similarity between two of them carries no semantic information. Do not
+evaluate retrieval against these numbers.
 
 ### How the contract is checked
 

@@ -29,6 +29,7 @@ import msgspec
 # in-process client never triggers, because it never decodes anything. The
 # multiprocess client does, on every request.
 from pvllm.multimodal.inputs import MultiModalFeatureSpec
+from pvllm.pooling_params import PoolingParams
 from pvllm.sampling_params import SamplingParams
 
 FINISH_REASON_STRINGS = ("stop", "length", "abort", "error", "repetition")
@@ -98,6 +99,8 @@ class EngineCoreRequest(
     #: R18. Multimodal placeholders. Encoded as plain structs so they survive the
     #: msgpack round trip to a multiprocess core, like everything else here.
     mm_features: list[MultiModalFeatureSpec] = []
+    #: R2.2. Set instead of `sampling_params` for an embedding request.
+    pooling_params: PoolingParams | None = None
 
 
 class EngineCoreOutput(
@@ -118,6 +121,8 @@ class EngineCoreOutput(
     kv_transfer_params: dict[str, Any] | None = None
     trace_headers: Mapping[str, str] | None = None
     num_cached_tokens: int = 0
+    #: R2.2. The vector, on the one step a pooling request produces output.
+    pooling_output: list[float] | None = None
 
     @property
     def finished(self) -> bool:

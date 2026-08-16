@@ -14,7 +14,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from pvllm.logger import init_logger
-from pvllm.outputs import CompletionOutput, RequestOutput
+from pvllm.outputs import (
+    CompletionOutput,
+    PoolingOutput,
+    PoolingRequestOutput,
+    RequestOutput,
+)
 from pvllm.sampling_params import RequestOutputKind, SamplingParams
 from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine import EngineCoreEventType, EngineCoreOutput, FinishReason
@@ -34,7 +39,7 @@ class RequestState:
     request_id: str
     prompt: str | None
     prompt_token_ids: list[int]
-    sampling_params: SamplingParams
+    sampling_params: SamplingParams | None
     detokenizer: IncrementalDetokenizer
     #: Wall-clock-free: stamped from the engine core's clock (R19.1).
     arrival_time: float
@@ -46,6 +51,10 @@ class RequestState:
     #: engine request *is* the client request.
     parent_request: Any = None
     index: int = 0
+
+    #: R2.2. Set for an embedding request, which produces a vector and no text --
+    #: so it has no detokenizer state worth updating and no stop conditions.
+    pooling_params: Any = None
 
     # --- timing (R12.1) ---------------------------------------------------
     # Every stamp comes from the engine core's clock, so under a virtual clock
@@ -122,8 +131,15 @@ class RequestState:
             num_prompt_tokens=len(self.prompt_token_ids),
             num_generation_tokens=self.num_generation_tokens,
             num_cached_tokens=self.num_cached_tokens,
-            max_tokens_param=self.sampling_params.max_tokens,
-            n_param=self.sampling_params.n,
+            # R2.2. A pooling request generates nothing, so neither parameter
+            # exists for it -- reported as the histogram's absent case rather than
+            # as a zero, which would be a real request that asked for no tokens.
+            max_tokens_param=(
+                self.sampling_params.max_tokens
+                if self.sampling_params is not None
+                else None
+            ),
+            n_param=self.sampling_params.n if self.sampling_params is not None else 1,
         )
 
 
@@ -143,10 +159,11 @@ class OutputProcessor:
         request_id: str,
         prompt: str | None,
         prompt_token_ids: list[int],
-        sampling_params: SamplingParams,
+        sampling_params: SamplingParams | None,
         arrival_time: float,
         parent_request: Any = None,
         index: int = 0,
+        pooling_params: Any = None,
     ) -> None:
         if request_id in self.request_states:
             raise ValueError(f"request {request_id!r} already exists")
@@ -156,11 +173,14 @@ class OutputProcessor:
             prompt_token_ids=list(prompt_token_ids),
             sampling_params=sampling_params,
             detokenizer=SlowIncrementalDetokenizer(
-                self.tokenizer, list(prompt_token_ids), sampling_params
+                self.tokenizer,
+                list(prompt_token_ids),
+                sampling_params if sampling_params is not None else SamplingParams(),
             ),
             arrival_time=arrival_time,
             parent_request=parent_request,
             index=index,
+            pooling_params=pooling_params,
         )
 
     def abort_requests(self, request_ids: list[str]) -> None:
@@ -172,17 +192,39 @@ class OutputProcessor:
         engine_core_outputs: list[EngineCoreOutput],
         now: float = 0.0,
         iteration_stats: IterationStats | None = None,
-    ) -> list[RequestOutput]:
+    ) -> list[RequestOutput | PoolingRequestOutput]:
         """Fold one step's output into per-request text, and time it.
 
         `now` is the engine core's clock (R19.1); the frontend has none of its own.
         """
-        outputs: list[RequestOutput] = []
+        outputs: list[RequestOutput | PoolingRequestOutput] = []
 
         for engine_output in engine_core_outputs:
             state = self.request_states.get(engine_output.request_id)
             if state is None:
                 # Aborted between the step being scheduled and its output arriving.
+                continue
+
+            # R2.2. An embedding request has no text: no detokenizer to advance, no
+            # stop strings to look for, and one output rather than a stream of them.
+            if state.pooling_params is not None:
+                if engine_output.pooling_output is None:
+                    continue
+                outputs.append(
+                    PoolingRequestOutput(
+                        request_id=engine_output.request_id,
+                        outputs=PoolingOutput(data=engine_output.pooling_output),
+                        prompt_token_ids=state.prompt_token_ids,
+                        finished=True,
+                    )
+                )
+                self._retire(
+                    state,
+                    engine_output.request_id,
+                    now,
+                    engine_output.finish_reason,
+                    iteration_stats,
+                )
                 continue
 
             finish_reason = engine_output.finish_reason
@@ -230,6 +272,7 @@ class OutputProcessor:
                         state.time_to_first_token
                     )
 
+            assert state.sampling_params is not None
             delta = state.sampling_params.output_kind == RequestOutputKind.DELTA
             text = state.detokenizer.get_next_output_text(finished, delta)
 
