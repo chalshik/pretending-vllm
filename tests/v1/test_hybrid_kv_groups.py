@@ -200,9 +200,15 @@ def test_a_hybrid_request_is_charged_for_every_group_it_holds():
         max_num_seqs=4,
         kv_cache_groups=groups,
     )
-    # Five windowed groups at ceil(1023/16)+1 = 65 blocks, one full group at
-    # 4096/16 = 256 blocks.
-    expected_blocks_per_request = 5 * 65 + 256
+    # Five windowed groups plus one full group. A windowed group's peak is not its
+    # steady state: eviction runs after the step has already allocated slots for
+    # everything it scheduled, so one step's token budget is resident alongside the
+    # window. R10.6's guard compares against this, and under-counting it let a config
+    # start and then livelock -- see `windowed_blocks_for_one_request`.
+    from pvllm.sim.memory import windowed_blocks_for_one_request
+
+    windowed = windowed_blocks_for_one_request(1024, 16, 4096, 512)
+    expected_blocks_per_request = 5 * windowed + 4096 // 16
     assert profile.max_concurrency == pytest.approx(
         (profile.num_gpu_blocks - 1) / expected_blocks_per_request, rel=1e-6
     )

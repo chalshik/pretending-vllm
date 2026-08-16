@@ -98,13 +98,13 @@ def test_a_window_raises_concurrency_in_proportion():
     wide = concurrency(4096)
     narrow = concurrency(1024)
 
-    # Not exactly 8x and 32x, and this test used to assert that it was. Concurrency
-    # is bounded by the blocks a request *holds*, which is one more than the window
-    # divides into -- the live window straddles a block boundary and eviction runs
-    # after allocation, so the outgoing block is still held. The old assertion
-    # encoded the overstated figure, which is how it survived.
-    assert wide > full * 7
-    assert narrow > full * 30
+    # Not 8x and 32x, and this test has twice encoded an overstated figure. What a
+    # request *holds* is the window plus one step's token budget: eviction runs after
+    # the step has allocated slots for everything it scheduled, so the whole prefill
+    # chunk is resident alongside the window. That term dominates a narrow window, so
+    # the gain is real and far below the ratio of the windows themselves.
+    assert wide > full * 1.5
+    assert narrow > wide
     assert wide < full * 8
     assert narrow < full * 32
 
@@ -220,3 +220,59 @@ def test_a_windowed_group_caches_the_tail_its_window_attends_to():
         assert manager.enable_caching
     finally:
         engine.shutdown()
+
+
+def test_a_window_smaller_than_a_step_budget_is_refused_not_hung():
+    """R10.6. The peak a windowed request passes through is its window *plus* one
+    step's token budget: eviction runs in `update_from_output`, after the step has
+    already allocated slots for everything it scheduled.
+
+    Under-counting that is not a small error in a reported figure -- it is a silent
+    hang. The pool cleared the steady state, so startup passed and reported a
+    concurrency figure; then `allocate_slots` returned `None` every step forever, with
+    no error and no log line. The request computed zero tokens and the engine never
+    stopped asking.
+    """
+    from pvllm.sim.memory import SimOutOfMemoryError, windowed_blocks_for_one_request
+
+    # A 64-token window against a 1024-token step budget needs 69 blocks, not 5.
+    assert windowed_blocks_for_one_request(64, 16, 2048, 1024) == 69
+    assert windowed_blocks_for_one_request(64, 16, 2048, 0) == 5
+
+    with pytest.raises(SimOutOfMemoryError, match="needs 69"):
+        LLM(
+            model="tiny-test",
+            device_card="tiny-2gb",
+            max_model_len=2048,
+            block_size=16,
+            max_num_batched_tokens=1024,
+            max_num_seqs=1,
+            sliding_window=64,
+            num_gpu_blocks_override=16,
+            disable_log_stats=True,
+        ).shutdown()
+
+    # And a pool that does clear the peak serves the request rather than stalling.
+    llm = LLM(
+        model="tiny-test",
+        device_card="tiny-2gb",
+        max_model_len=2048,
+        block_size=16,
+        max_num_batched_tokens=1024,
+        max_num_seqs=1,
+        sliding_window=64,
+        num_gpu_blocks_override=128,
+        disable_log_stats=True,
+    )
+    try:
+        engine = llm.llm_engine
+        engine.add_request(
+            "r0", [7] * 1500, SamplingParams(max_tokens=8), pooling_params=None
+        )
+        for _ in range(200):
+            if not engine.has_unfinished_requests():
+                break
+            engine.step()
+        assert not engine.has_unfinished_requests()
+    finally:
+        llm.shutdown()

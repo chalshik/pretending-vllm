@@ -217,6 +217,28 @@ def compute_lora_bytes(
     return per_adapter * DTYPE_BYTES[dtype] * max_loras
 
 
+def windowed_blocks_for_one_request(
+    sliding_window: int, block_size: int, max_model_len: int, max_in_flight_tokens: int
+) -> int:
+    """Blocks a windowed request holds at its *peak*. R6.7, R10.6.
+
+    Not `ceil((window - 1) / block) + 1`. That is the steady state, and a request
+    passes through a larger one on the way: eviction runs in `update_from_output`,
+    *after* the step has already allocated slots for everything it scheduled, so a
+    prefill chunk of `max_num_batched_tokens` is resident alongside the window before
+    anything is given back.
+
+    Under-counting here is not a small error in a reported figure -- it is a silent
+    hang. R10.6's startup guard compares the pool against this number, so a pool that
+    clears the steady state but not the peak passes startup and then never schedules
+    the request: `allocate_slots` returns `None` every step, forever, with no error
+    and no log line. A window of 64 against a 1024-token step budget needs 69 blocks
+    and the old arithmetic asked for 5.
+    """
+    peak_tokens = min(sliding_window - 1 + max_in_flight_tokens, max_model_len)
+    return -(-peak_tokens // block_size) + 1
+
+
 def compute_memory_profile(
     model: ModelCard,
     device: DeviceCard,
@@ -351,22 +373,16 @@ def compute_memory_profile(
         for group in kv_cache_groups:
             window = getattr(group.kv_cache_spec, "sliding_window", None)
             if window is not None and window < max_model_len:
-                blocks_for_one_request += (
-                    window - 1 + block_size - 1
-                ) // block_size + 1
+                blocks_for_one_request += windowed_blocks_for_one_request(
+                    window, block_size, max_model_len, max_num_batched_tokens
+                )
                 usable_blocks_adjustment = 1
             else:
                 blocks_for_one_request += (max_model_len + block_size - 1) // block_size
     elif sliding_window is not None and sliding_window < max_model_len:
-        # A windowed request holds `ceil((window - 1) / block) + 1` blocks, not
-        # `window / block`: the live window straddles a boundary, and eviction runs
-        # *after* allocation so the outgoing block is still held when the new one is
-        # taken. This is `SlidingWindowManager.num_blocks_in_window`, and the two
-        # must agree -- under-counting here let a config start and then livelock,
-        # with the request needing a block the pool could never give and waiting
-        # forever for capacity that was not coming. R10.6 exists to refuse that at
-        # startup rather than at request time.
-        blocks_for_one_request = (sliding_window - 1 + block_size - 1) // block_size + 1
+        blocks_for_one_request = windowed_blocks_for_one_request(
+            sliding_window, block_size, max_model_len, max_num_batched_tokens
+        )
         usable_blocks_adjustment = 1
     if num_gpu_blocks < blocks_for_one_request:
         raise SimOutOfMemoryError(
