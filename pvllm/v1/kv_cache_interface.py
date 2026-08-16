@@ -39,7 +39,7 @@ class KVCacheSpec:
     @property
     def type_id(self) -> str:
         """Layers sharing a type id can share a KV cache group."""
-        return f"full_attention_{self.block_size}_{self.page_size_bytes}"
+        return f"{type(self).__name__}_{self.block_size}_{self.page_size_bytes}"
 
 
 @dataclass(frozen=True)

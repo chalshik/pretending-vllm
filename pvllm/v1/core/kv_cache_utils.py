@@ -23,8 +23,13 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NewType
 
+from pvllm.logger import init_logger
+from pvllm.v1.kv_cache_interface import KVCacheGroupSpec, KVCacheSpec
+
 if TYPE_CHECKING:
     from pvllm.v1.request import Request
+
+logger = init_logger(__name__)
 
 
 #: The hash of a full block's contents, including every block before it.
@@ -439,3 +444,81 @@ def get_request_block_hasher(
         return new_hashes
 
     return request_block_hasher
+
+
+def get_kv_cache_groups(
+    specs: dict[str, KVCacheSpec],
+) -> list[KVCacheGroupSpec]:
+    """Split a model's layers into groups that can share a block table. R6.7.
+
+    Upstream's algorithm (`_get_kv_cache_groups_uniform_page_size`), and its shape is
+    not obvious, so it is worth stating. A model with 25 windowed layers and 5 full
+    ones is not two groups of 25 and 5. It is *six* groups of five: the layers repeat
+    with a pattern, and the block pool can only be divided evenly if every group
+    occupies the same bytes per block. Groups of unequal size would need pages of
+    unequal size, and a pool of mixed-size pages fragments.
+
+    So the group size is the smallest bucket, and each larger bucket is split into
+    `ceil(len / group_size)` groups. Padding is added if a bucket does not divide
+    evenly, and upstream's `layers[i::num_groups]` striping is used rather than
+    contiguous slicing -- under pipeline parallelism a contiguous split puts whole
+    groups on one stage and leaves empty ones on another, which then get padded to
+    the same size and waste the memory the grouping exists to save.
+    """
+    if not specs:
+        raise ValueError("the model reported no attention layers")
+
+    buckets: dict[str, list[str]] = {}
+    for layer_name, spec in specs.items():
+        buckets.setdefault(spec.type_id, []).append(layer_name)
+
+    if len(buckets) == 1:
+        layer_names = next(iter(buckets.values()))
+        return [
+            KVCacheGroupSpec(
+                layer_names=layer_names, kv_cache_spec=specs[layer_names[0]]
+            )
+        ]
+
+    sizes = [len(layers) for layers in buckets.values()]
+    group_size = min(sizes)
+    if max(sizes) < min(sizes) * 1.5:
+        # Upstream's heuristic, and the reason is worth keeping: padding one bucket
+        # up to the larger size wastes less than splitting the larger one into two
+        # groups that are each mostly padding.
+        group_size = max(sizes)
+
+    grouped: list[list[str]] = []
+    for layers in buckets.values():
+        num_groups = -(-len(layers) // group_size)
+        padding = num_groups * group_size - len(layers)
+        if padding:
+            logger.warning(
+                "Hybrid KV cache: %d padding layer(s) added to a group of %d, "
+                "wasting at most %.1f%% of the KV pool [modeled]",
+                padding,
+                group_size,
+                100.0 * padding / (num_groups * group_size),
+            )
+        for index in range(num_groups):
+            grouped.append(layers[index::num_groups])
+
+    groups = [
+        KVCacheGroupSpec(layer_names=layer_names, kv_cache_spec=specs[layer_names[0]])
+        for layer_names in grouped
+    ]
+
+    # The invariant the whole scheme rests on. Checked rather than assumed: a
+    # violation means the pool cannot be divided into equal pages, and every block
+    # count downstream would be wrong in a way no test would name.
+    page_sizes = {
+        group.kv_cache_spec.page_size_bytes * len(group.layer_names) for group in groups
+    }
+    if len(page_sizes) != 1:
+        raise NotImplementedError(
+            f"this model's KV cache groups would need pages of {sorted(page_sizes)} "
+            f"bytes. Every group must occupy the same bytes per block, or the pool "
+            f"fragments; upstream assumes the same. Layers per group and bytes per "
+            f"token per layer must both be uniform."
+        )
+    return groups

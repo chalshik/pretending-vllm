@@ -30,6 +30,7 @@ from pvllm.sim.model_db import load_model_card
 from pvllm.sim.rng import RngFactory
 from pvllm.sim.weights import StartupTimeline
 from pvllm.timebase import Clock
+from pvllm.v1.core.kv_cache_utils import get_kv_cache_groups
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from pvllm.v1.outputs import ModelRunnerOutput
@@ -198,6 +199,9 @@ class Worker:
             num_gpu_blocks_override=self.cache_config.num_gpu_blocks_override,
             lora_bytes=self._lora_bytes(),
             sliding_window=self.cache_config.sliding_window,
+            # R6.7. The same groups the engine core sizes the pool from, so the
+            # startup line and the scheduler's pool cannot disagree.
+            kv_cache_groups=get_kv_cache_groups(self.get_kv_cache_spec()),
         )
         logger.info("%s", self.memory_profile.summary())
         # The *block count* is what the profile resolved -- including any

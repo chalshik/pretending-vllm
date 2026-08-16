@@ -331,19 +331,39 @@ class SimModelRunner:
     def prepare_attn(
         self, input_batch: InputBatch, scheduler_output: SchedulerOutput
     ) -> SimAttentionMetadata:
-        """Build the attention metadata. R8.2, and R8.3's validation runs here."""
+        """Build the attention metadata. R8.2, and R8.3's validation runs here.
+
+        One set per KV cache group (R6.7). Each group has its own block table, so
+        each has its own slot mapping -- and R8.3's oracle is only an oracle if it
+        runs over all of them. Building group 0's alone would leave a hybrid model's
+        windowed groups unchecked, which is exactly where an off-by-one in block
+        accounting lands.
+
+        Group 0's metadata is what the cost model reads, because the step's shape is
+        the same for every group; the others are built for their validation.
+        """
         assert self.block_tables is not None
-        common_prefix = (
-            scheduler_output.num_common_prefix_blocks[0]
-            if scheduler_output.num_common_prefix_blocks
-            else 0
-        )
-        return build_attn_metadata(
+        common = scheduler_output.num_common_prefix_blocks or []
+        num_groups = self.block_tables.num_kv_cache_groups
+
+        metadata = build_attn_metadata(
             input_batch,
             self.block_tables,
-            num_common_prefix_blocks=common_prefix,
+            num_common_prefix_blocks=common[0] if common else 0,
             decode_query_len=self.decode_query_len,
+            group_id=0,
         )
+        for group_id in range(1, num_groups):
+            build_attn_metadata(
+                input_batch,
+                self.block_tables,
+                num_common_prefix_blocks=(
+                    common[group_id] if group_id < len(common) else 0
+                ),
+                decode_query_len=self.decode_query_len,
+                group_id=group_id,
+            )
+        return metadata
 
     # --- execution -----------------------------------------------------------
 

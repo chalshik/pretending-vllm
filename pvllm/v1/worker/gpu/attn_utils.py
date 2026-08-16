@@ -10,6 +10,8 @@ indefinitely; metadata that feeds a number someone looks at cannot.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from pvllm.config import VllmConfig
@@ -24,54 +26,104 @@ from pvllm.v1.worker.gpu.input_batch import InputBatch
 
 
 def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
-    """One spec per attention layer.
+    """One spec per attention layer. R6.7.
 
-    Every layer of a dense model shares a spec, so they collapse into one KV cache
-    group. Hybrid models (R6.7) produce more than one; the per-layer shape is what
-    makes that expressible without changing this function.
+    Three shapes, and the per-layer return is what makes all three expressible
+    without a branch anywhere downstream:
+
+    * every layer full attention -- the ordinary dense model, one group;
+    * every layer windowed -- a uniformly-windowed model, or `--sliding-window`
+      forcing one, still one group;
+    * a repeating mix -- Gemma-3's five windowed layers to every full one, which
+      becomes several groups with a unified page size.
+
+    `--sliding-window` overrides the card, and it makes *every* layer windowed. That
+    is what the flag means upstream too: it is a way to ask "what would this model
+    cost with a window", not a way to add one to a hybrid pattern.
     """
     model_config = vllm_config.model_config
     cache_config = vllm_config.cache_config
     parallel_config = vllm_config.parallel_config
+    scheduler_config = vllm_config.scheduler_config
 
     kv_cache_dtype = cache_config.resolved_cache_dtype or model_config.resolved_dtype
     from pvllm.sim.model_db import DTYPE_BYTES
 
-    # R6.7. A configured window makes every layer a windowed one -- which is what a
-    # uniformly-windowed model (Mistral-style) looks like. Models that *mix* full and
-    # windowed layers (Gemma-2 style) need two groups with a unified page size, and
-    # `_initialize_kv_caches` refuses them by name rather than collapsing them into
-    # one group, which would report the wrong capacity for both halves.
-    if cache_config.sliding_window is not None:
-        windowed = SlidingWindowSpec(
-            block_size=cache_config.block_size,
-            num_kv_heads=model_config.get_num_kv_heads(
-                parallel_config.tensor_parallel_size
-            ),
-            head_size=model_config.get_head_size(),
-            dtype=kv_cache_dtype,
-            dtype_bytes=DTYPE_BYTES[kv_cache_dtype],
-            sliding_window=cache_config.sliding_window,
-        )
-        num_layers = model_config.get_num_layers(
-            parallel_config.tensor_parallel_size,
-            parallel_config.pipeline_parallel_size,
-        )
-        return {f"layer.{i}": windowed for i in range(num_layers)}
-
-    spec = FullAttentionSpec(
-        block_size=cache_config.block_size,
-        num_kv_heads=model_config.get_num_kv_heads(
-            parallel_config.tensor_parallel_size
-        ),
-        head_size=model_config.get_head_size(),
-        dtype=kv_cache_dtype,
-        dtype_bytes=DTYPE_BYTES[kv_cache_dtype],
-    )
     num_layers = model_config.get_num_layers(
-        parallel_config.tensor_parallel_size, parallel_config.pipeline_parallel_size
+        parallel_config.tensor_parallel_size,
+        parallel_config.pipeline_parallel_size,
     )
-    return {f"model.layers.{i}.self_attn": spec for i in range(num_layers)}
+    block_size = cache_config.block_size
+    num_kv_heads = model_config.get_num_kv_heads(parallel_config.tensor_parallel_size)
+    head_size = model_config.get_head_size()
+    dtype_bytes = DTYPE_BYTES[kv_cache_dtype]
+
+    def full() -> FullAttentionSpec:
+        return FullAttentionSpec(
+            block_size=block_size,
+            num_kv_heads=num_kv_heads,
+            head_size=head_size,
+            dtype=kv_cache_dtype,
+            dtype_bytes=dtype_bytes,
+        )
+
+    def windowed(window: int) -> SlidingWindowSpec:
+        return SlidingWindowSpec(
+            block_size=block_size,
+            num_kv_heads=num_kv_heads,
+            head_size=head_size,
+            dtype=kv_cache_dtype,
+            dtype_bytes=dtype_bytes,
+            sliding_window=window,
+        )
+
+    if cache_config.sliding_window is not None:
+        uniform: KVCacheSpec = windowed(cache_config.sliding_window)
+        return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+
+    card = _model_card(vllm_config)
+    if card is not None and card.is_hybrid_attention:
+        assert card.sliding_window is not None
+        if scheduler_config is not None and getattr(
+            scheduler_config, "disable_hybrid_kv_cache_manager", False
+        ):
+            # Upstream's escape hatch: promote every windowed layer to full
+            # attention, giving up the memory saving and keeping one group. Worth
+            # having as more than a compatibility switch -- the two runs side by
+            # side *are* the capacity argument for hybrid attention.
+            return {f"model.layers.{i}.self_attn": full() for i in range(num_layers)}
+        full_spec = full()
+        window_spec = windowed(card.sliding_window)
+        return {
+            f"model.layers.{i}.self_attn": (
+                full_spec if card.layer_is_full_attention(i) else window_spec
+            )
+            for i in range(num_layers)
+        }
+    if card is not None and card.sliding_window is not None:
+        uniform = windowed(card.sliding_window)
+        return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+
+    uniform = full()
+    return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+
+
+def _model_card(vllm_config: VllmConfig) -> Any:
+    """The card this deployment resolved to, or `None` if it has no counterpart.
+
+    Read here rather than passed down because the attention shape is a property of
+    the *model*, and this is the one place that turns a model into layer specs.
+    """
+    from pvllm.sim.model_db import load_model_card
+
+    sim_config = vllm_config.sim_config
+    name = (sim_config.model_card if sim_config is not None else None) or (
+        vllm_config.model_config.model
+    )
+    try:
+        return load_model_card(name)
+    except (KeyError, FileNotFoundError):
+        return None
 
 
 def build_attn_metadata(

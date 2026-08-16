@@ -74,6 +74,10 @@ class EngineArgs:
     max_num_partial_prefills: int = 1
     long_prefill_token_threshold: int = 0
     enable_chunked_prefill: bool = True
+    #: R6.7. Promote every sliding-window layer to full attention, collapsing a
+    #: hybrid model into one KV cache group. Upstream's flag, and the honest A/B for
+    #: what hybrid attention buys -- same model, both ways.
+    disable_hybrid_kv_cache_manager: bool = False
     scheduling_policy: str = "fcfs"
 
     # --- parallelism ---------------------------------------------------------
@@ -172,6 +176,7 @@ class EngineArgs:
             long_prefill_token_threshold=self.long_prefill_token_threshold,
             max_num_partial_prefills=self.max_num_partial_prefills,
             policy=self.scheduling_policy,  # type: ignore[arg-type]
+            disable_hybrid_kv_cache_manager=self.disable_hybrid_kv_cache_manager,
         )
 
         # R16.1. Built only when asked for: `None` is what tells the scheduler and

@@ -194,7 +194,7 @@ class Platform:
     def get_punica_wrapper(cls) -> str:
         """Fully-qualified name of the LoRA punica wrapper class (P3)."""
         raise NotImplementedError(
-            "LoRA is not implemented until milestone M4 (requirement R16)"
+            "LoRA has no counterpart on this platform (requirement R16)"
         )
 
     # --- misc --------------------------------------------------------------

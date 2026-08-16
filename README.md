@@ -15,8 +15,8 @@ See [UPSTREAM.md](UPSTREAM.md).
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, KV
-> disaggregation, `n > 1`, and `/v1/embeddings` all work. Mixed full/windowed models, data and expert
-> parallelism, real KV transports, and a KV connector paired with a sliding window are not
+> disaggregation, `n > 1`, `/v1/embeddings`, and hybrid full/windowed models all work. Data and
+> expert parallelism, real KV transports, and a KV connector paired with a sliding window are not
 > implemented and refuse by name.
 
 ```bash
@@ -163,6 +163,7 @@ observable rather than approximated.
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |
 | `--lora-modules name=path` | each adapter is served under its own model name: `/v1/models` lists it, and a request naming it routes to it |
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
+| a hybrid model (Gemma-3 style) | five windowed layers to every full one become six KV cache groups sharing one pool; KV per request is a blend, and `--disable-hybrid-kv-cache-manager` prices the same model without it |
 | `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
 | `/v1/embeddings` | each document is its own request: prefill and stop, no decode — so a page of them batches, queues, and shares a preamble through the prefix cache |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |

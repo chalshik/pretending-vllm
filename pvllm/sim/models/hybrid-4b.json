@@ -1,0 +1,17 @@
+{
+  "name": "hybrid-4b",
+  "num_hidden_layers": 30,
+  "hidden_size": 2560,
+  "num_attention_heads": 8,
+  "num_key_value_heads": 4,
+  "head_dim": 256,
+  "intermediate_size": 10240,
+  "vocab_size": 262144,
+  "max_position_embeddings": 131072,
+  "dtype": "bfloat16",
+  "architecture": "Gemma3ForCausalLM",
+  "tie_word_embeddings": true,
+  "sliding_window": 1024,
+  "sliding_window_pattern": 6,
+  "provenance": "Representative of a mid-size hybrid-attention decoder (Gemma-3-4B class): five sliding-window layers to every full-attention one. Dimensions are approximations of that architecture family, not a verified checkpoint config. The 5:1 pattern is the load-bearing part -- it is what makes the KV footprint a blend of bounded and unbounded rather than either one."
+}

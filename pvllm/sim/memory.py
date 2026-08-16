@@ -26,7 +26,9 @@ on declared quantities and is exact.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from pvllm.logger import init_logger
 from pvllm.sim.hardware_db import DeviceCard
@@ -200,8 +202,17 @@ def compute_memory_profile(
     num_gpu_blocks_override: int | None = None,
     lora_bytes: int = 0,
     sliding_window: int | None = None,
+    kv_cache_groups: Sequence[Any] | None = None,
 ) -> MemoryProfile:
-    """Derive the KV pool and `num_gpu_blocks`. R10.2, R10.5, R10.6."""
+    """Derive the KV pool and `num_gpu_blocks`. R10.2, R10.5, R10.6.
+
+    `kv_cache_groups` is the resolved group layout (R6.7). Passed rather than
+    re-derived because the engine core sizes the pool from exactly this, and the two
+    disagreeing is how a capacity number becomes a lie: the profile would report one
+    `num_gpu_blocks` in the startup line and the scheduler would be handed another.
+    A dense model has one group holding every layer, which is the case the older
+    `sliding_window` argument covers on its own.
+    """
     capacity = device.memory_bytes
     usable = int(capacity * gpu_memory_utilization)
 
@@ -223,7 +234,16 @@ def compute_memory_profile(
     )
 
     kv_bytes_per_token = model.kv_bytes_per_token(kv_cache_dtype, tp_size) // pp_size
-    kv_bytes_per_block = block_size * kv_bytes_per_token
+    # R6.7. A block backs one page in each of a *group's* layers, and the groups
+    # share the pool. For a dense model that is every layer and this is the whole
+    # model's per-token cost; for a hybrid one it is the layers of one group, so a
+    # block is smaller and the pool holds proportionally more of them.
+    layers_per_group = layers_local
+    if kv_cache_groups:
+        layers_per_group = max(len(group.layer_names) for group in kv_cache_groups)
+    kv_bytes_per_block = (
+        block_size * kv_bytes_per_token * layers_per_group // max(1, layers_local)
+    )
 
     # R16.1. Adapter weights are resident on the device and come out of the same
     # budget as everything else, so serving eight adapters shrinks the KV pool.
@@ -270,7 +290,24 @@ def compute_memory_profile(
     #: The null block is reserved once for the whole pool, not per request, so it
     #: comes off the pool rather than being added to each request's cost.
     usable_blocks_adjustment = 0
-    if sliding_window is not None and sliding_window < max_model_len:
+
+    if kv_cache_groups and len(kv_cache_groups) > 1:
+        # R6.7. A hybrid request holds blocks in *every* group, and the groups do not
+        # cost the same: a full-attention group grows with the conversation, a
+        # windowed one stops at its window. The blend is the point -- a 5:1 model's
+        # KV is neither bounded nor unbounded, and reporting either figure would
+        # answer a capacity question with the wrong model's number.
+        blocks_for_one_request = 0
+        for group in kv_cache_groups:
+            window = getattr(group.kv_cache_spec, "sliding_window", None)
+            if window is not None and window < max_model_len:
+                blocks_for_one_request += (
+                    window - 1 + block_size - 1
+                ) // block_size + 1
+                usable_blocks_adjustment = 1
+            else:
+                blocks_for_one_request += (max_model_len + block_size - 1) // block_size
+    elif sliding_window is not None and sliding_window < max_model_len:
         # A windowed request holds `ceil((window - 1) / block) + 1` blocks, not
         # `window / block`: the live window straddles a boundary, and eviction runs
         # *after* allocation so the outgoing block is still held when the new one is

@@ -44,6 +44,11 @@ class SchedulerConfig:
     stream_interval: int = 1
     scheduler_cls: str | None = None
     async_scheduling: bool = False
+    #: R6.7. Upstream's escape hatch: promote every sliding-window layer to full
+    #: attention, giving up the memory saving and keeping one KV cache group. Worth
+    #: more here than compatibility -- the two runs side by side *are* the capacity
+    #: argument for hybrid attention, on one model rather than two.
+    disable_hybrid_kv_cache_manager: bool = False
 
     #: R18.1. Encoder tokens one step may process, and how many embeddings stay
     #: resident. Both default to the token budget, floored at the largest single

@@ -78,6 +78,13 @@ class ModelCard:
     #: *active* parameter count, which is what the compute term actually uses.
     num_experts: int = 0
     num_experts_per_token: int = 0
+    #: R6.7. Hybrid attention. `sliding_window` is the window windowed layers use;
+    #: `sliding_window_pattern` is the repeat length, with every `pattern`-th layer
+    #: full attention and the rest windowed -- Gemma-3's 5:1 is `pattern = 6`. A card
+    #: with a window and no pattern is *uniformly* windowed (Mistral-style); a card
+    #: with neither is ordinary full attention.
+    sliding_window: int | None = None
+    sliding_window_pattern: int | None = None
     #: Set only when a card must match a published figure that the derivation misses.
     num_parameters_override: int | None = None
     provenance: str = "uncalibrated approximation"
@@ -88,6 +95,32 @@ class ModelCard:
     @property
     def is_moe(self) -> bool:
         return self.num_experts > 0
+
+    @property
+    def is_hybrid_attention(self) -> bool:
+        """R6.7. Whether the layers do not all share one attention type."""
+        return (
+            self.sliding_window is not None and self.sliding_window_pattern is not None
+        )
+
+    def layer_is_full_attention(self, layer_index: int) -> bool:
+        """Whether layer `layer_index` attends to the whole context.
+
+        Gemma-3's convention, which is the one the published configs use: the
+        *last* layer of each repeat is the full-attention one, so a pattern of 6 is
+        five windowed layers followed by one full.
+        """
+        if not self.is_hybrid_attention:
+            return self.sliding_window is None
+        assert self.sliding_window_pattern is not None
+        return (layer_index + 1) % self.sliding_window_pattern == 0
+
+    @property
+    def num_full_attention_layers(self) -> int:
+        return sum(
+            self.layer_is_full_attention(index)
+            for index in range(self.num_hidden_layers)
+        )
 
     @property
     def dtype_bytes(self) -> int:

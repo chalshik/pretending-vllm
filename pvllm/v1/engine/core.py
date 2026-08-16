@@ -26,6 +26,7 @@ from pvllm.logger import init_logger
 from pvllm.timebase import Clock
 from pvllm.tokenizers import get_tokenizer
 from pvllm.tracing import TraceSink
+from pvllm.v1.core.kv_cache_utils import get_kv_cache_groups
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.core.sched.scheduler import Scheduler
 from pvllm.v1.engine import (
@@ -36,11 +37,7 @@ from pvllm.v1.engine import (
     FinishReason,
 )
 from pvllm.v1.executor.abstract import Executor
-from pvllm.v1.kv_cache_interface import (
-    KVCacheConfig,
-    KVCacheGroupSpec,
-    KVCacheSpec,
-)
+from pvllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from pvllm.v1.outputs import ModelRunnerOutput
 from pvllm.v1.request import Request, RequestStatus
 from pvllm.v1.structured_output import StructuredOutputManager
@@ -128,29 +125,24 @@ class EngineCore:
         if not specs:
             raise ValueError("the model reported no attention layers")
 
-        # Every layer of a dense model shares a spec, so they collapse into one
-        # group. The grouping is computed rather than assumed so hybrid models
-        # (R6.7) slot in without changing this.
-        by_type: dict[str, list[str]] = {}
-        for layer_name, spec in specs.items():
-            by_type.setdefault(spec.type_id, []).append(layer_name)
-
-        if len(by_type) > 1:
-            raise NotImplementedError(
-                f"this model needs {len(by_type)} KV cache groups (hybrid attention); "
-                f"multiple groups (requirement R6.7) land in M4"
-            )
-
-        layer_names = next(iter(by_type.values()))
-        spec = specs[layer_names[0]]
-        page_size = spec.page_size_bytes * len(layer_names)
+        # R6.7. Every layer of a dense model shares a spec and collapses into one
+        # group; a hybrid model's layers split into several, all with the same bytes
+        # per block. `get_kv_cache_groups` is upstream's partitioning, and the page
+        # size it guarantees is what lets one pool serve every group.
+        groups = get_kv_cache_groups(specs)
+        # One block is one page in each of a group's layers -- and the groups *share*
+        # the pool rather than each getting their own, which is what makes hybrid
+        # attention save anything at all. So the divisor is layers per group, not the
+        # model's layer count and not the group count. Upstream's `get_num_blocks`
+        # divides exactly this way; for a dense model there is one group holding
+        # every layer and the two forms coincide.
+        layers_per_group = max(len(group.layer_names) for group in groups)
+        page_size = groups[0].kv_cache_spec.page_size_bytes * layers_per_group
         num_blocks = available // page_size
 
         kv_cache_config = KVCacheConfig(
             num_blocks=int(num_blocks),
-            kv_cache_groups=[
-                KVCacheGroupSpec(layer_names=layer_names, kv_cache_spec=spec)
-            ],
+            kv_cache_groups=groups,
         )
         self.executor.initialize_from_config([kv_cache_config])
         self.executor.compile_or_warm_up_model()
