@@ -222,3 +222,82 @@ def test_expert_parallelism_makes_a_model_fit_that_otherwise_cannot():
         assert profile.num_gpu_blocks > 0
     finally:
         llm.shutdown()
+
+
+# --- lockstep ---------------------------------------------------------------
+
+
+def _ep_engine(**overrides):
+    return LLM(
+        model="moe-8x7b",
+        device_card="datacenter-80gb",
+        max_model_len=2048,
+        block_size=16,
+        max_num_batched_tokens=512,
+        max_num_seqs=4,
+        tensor_parallel_size=1,
+        data_parallel_size=4,
+        disable_log_stats=True,
+        seed=1,
+        **overrides,
+    )
+
+
+def test_an_idle_replica_pays_a_dummy_step():
+    """R13.4. The MoE collective is taken across every EP rank, so a replica with no
+    work cannot skip a step -- it runs a forward pass over one token to keep the
+    collective whole. One request on four replicas therefore costs three dummy steps
+    for every real one, and that is device time producing nothing."""
+    from pvllm.sampling_params import SamplingParams
+
+    llm = _ep_engine(enable_expert_parallel=True)
+    try:
+        llm.generate(["a single prompt"], SamplingParams(max_tokens=16))
+        stats = llm.llm_engine.make_stats()
+        assert stats["lockstep"] is True
+        # Three idle replicas, one step each per real step.
+        assert stats["per_engine_dummy_steps"][0] == 0
+        assert sorted(stats["per_engine_dummy_steps"])[1:] == [16, 16, 16]
+        assert stats["dummy_step_seconds"] > 0
+    finally:
+        llm.shutdown()
+
+
+def test_a_fully_loaded_deployment_pays_none():
+    """The cost is the *imbalance*, not the feature. With every replica busy there is
+    nothing to keep whole artificially."""
+    from pvllm.sampling_params import SamplingParams
+
+    llm = _ep_engine(enable_expert_parallel=True)
+    try:
+        llm.generate(
+            [f"prompt {index}" for index in range(8)], SamplingParams(max_tokens=16)
+        )
+        stats = llm.llm_engine.make_stats()
+        assert stats["num_dummy_steps"] == 0
+    finally:
+        llm.shutdown()
+
+
+def test_plain_data_parallelism_has_no_lockstep():
+    """Independent whole engines behind a router, which is what plain DP is: a replica
+    with nothing to do idles, and idling is free."""
+    from pvllm.sampling_params import SamplingParams
+
+    llm = LLM(
+        model="dense-8b",
+        device_card="datacenter-80gb",
+        max_model_len=1024,
+        block_size=16,
+        max_num_batched_tokens=512,
+        max_num_seqs=4,
+        data_parallel_size=4,
+        disable_log_stats=True,
+    )
+    try:
+        llm.generate(["one prompt"], SamplingParams(max_tokens=8))
+        stats = llm.llm_engine.make_stats()
+        assert stats["lockstep"] is False
+        assert stats["num_dummy_steps"] == 0
+    finally:
+        llm.shutdown()

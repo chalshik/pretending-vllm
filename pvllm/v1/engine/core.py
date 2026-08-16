@@ -97,6 +97,12 @@ class EngineCore:
         )
 
         self.step_index = 0
+        #: R13.4. Steps this replica spent keeping an EP collective whole rather than
+        #: serving a request. Device time that produced nothing, and counted because
+        #: nothing upstream counts it -- a DP+EP deployment can sit at full device
+        #: utilisation with near-zero goodput and no metric says so.
+        self.num_dummy_steps = 0
+        self.dummy_step_seconds = 0.0
         self._request_counter = 0
 
     def _open_trace(self) -> TraceSink:
@@ -376,6 +382,27 @@ class EngineCore:
         self.step_index += 1
         model_executed = scheduler_output.total_num_scheduled_tokens > 0
         return engine_core_outputs, model_executed
+
+    def execute_dummy_batch(self) -> float:
+        """R13.4. Step the device without scheduling anything.
+
+        Under expert parallelism a replica with no work cannot simply idle: the MoE
+        collective is taken across every rank, so it runs a forward pass over one
+        token to keep the collective whole. The scheduler is not consulted and no
+        request state moves -- which is what makes this safe to call on an engine
+        that has nothing to do, and why it produces no output.
+        """
+        seconds = self.executor.collective_rpc("execute_dummy_batch")[0]
+        self.num_dummy_steps += 1
+        self.dummy_step_seconds += float(seconds)
+        self.trace.emit(
+            "step",
+            t=self.clock.time(),
+            step=self.step_index,
+            dummy=True,
+            num_scheduled_tokens=0,
+        )
+        return float(seconds)
 
     # --- introspection -------------------------------------------------------
 

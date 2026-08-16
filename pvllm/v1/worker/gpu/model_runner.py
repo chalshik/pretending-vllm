@@ -141,6 +141,32 @@ class SimModelRunner:
         )
         return self.device.capture_graphs(len(self.captured_sizes))
 
+    def execute_dummy_batch(self) -> StepCost:
+        """A forward pass over nothing, and what it costs. R13.4.
+
+        Upstream's `execute_dummy_batch` runs `_dummy_run(uniform_decode=True)` -- a
+        real single-token decode over the whole model. A replica with no work of its
+        own runs one every step under expert parallelism, because the MoE collective
+        is taken across every rank and a replica that skipped would leave the others
+        waiting on a message that never comes.
+
+        Charged through the same cost model as a real step rather than as a constant,
+        because the number is not small and its *shape* is the point: at one token the
+        KV and activation traffic vanish and the step is the weight read, so a dummy
+        step costs roughly what a decode step costs. That is the whole reason an
+        idle replica under EP is expensive.
+        """
+        tokens = self.decode_query_len
+        return self.device.execute(
+            StepProfile(
+                num_tokens=tokens,
+                num_reqs=1,
+                query_lens=[tokens],
+                seq_lens=[tokens],
+                is_graph_hit=not self.enforce_eager,
+            )
+        )
+
     # --- persistent batch maintenance (R7.3) ---------------------------------
 
     def add_requests(self, scheduler_output: SchedulerOutput) -> None:

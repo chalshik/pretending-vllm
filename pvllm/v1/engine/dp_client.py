@@ -23,19 +23,17 @@ reproduced here rather than assumed:
   penalises a queue in proportion to KV pressure. That policy is ported verbatim,
   because "which replica gets this request" is exactly what a DP experiment asks.
 
-**Expert parallelism changes what these replicas are, and one thing is not yet
-modeled.** With `--enable-expert-parallel` the replicas stop being independent copies
-and become shards of one expert set (R13.4), which is why the memory picture improves
-so sharply. Upstream then requires them to step in *lockstep*: the MoE collective is
-taken across every EP rank, so a replica with no work of its own cannot skip a step --
-it runs a dummy single-token forward pass (`execute_dummy_batch`) to keep the
-collective whole. That dummy step is real device time spent producing nothing.
+**Expert parallelism changes what these replicas are.** With
+`--enable-expert-parallel` they stop being independent copies and become shards of one
+expert set (R13.4), which is why the memory picture improves so sharply. They then have
+to step in *lockstep*: the MoE collective is taken across every EP rank, so a replica
+with no work of its own cannot skip a step -- it runs a dummy single-token forward pass
+to keep the collective whole, and that is real device time spent producing nothing.
 
-pvllm does not model it yet. `get_output` below steps only replicas that have work, so
-an *unevenly loaded* DP+EP deployment is reported optimistically: the idle replicas
-cost nothing here and would cost a dummy step in production. Evenly loaded, the numbers
-are right. This is the same shape of gap as pipeline parallelism's unmodeled microbatch
-overlap -- named here rather than left for a reader to discover.
+`_lockstep_round` models it, and the stats report it per replica, because the arithmetic
+is invisible otherwise: one request on a four-replica EP deployment costs three dummy
+steps for every real one, and nothing in upstream's metrics says so. A deployment can
+sit at full device utilisation with a quarter of the goodput it looks like it has.
 
 **Clock.** Each replica owns its own clock, because each models its own device, and
 the deployment's elapsed time is the *slowest* replica's rather than the sum -- they
@@ -109,6 +107,19 @@ class DPInprocClient(EngineCoreClient):
         #: counter beside the coordinator's snapshot, because the count is exact
         #: while a snapshot can be stale.
         self.engine_inflight: list[int] = [0] * self.data_parallel_size
+        # R13.4. Lockstep, and only under expert parallelism. Plain data parallelism
+        # is independent whole engines behind a router and stays that way -- a replica
+        # with nothing to do idles, as it should. Under EP the replicas are shards of
+        # one expert set, the MoE collective is taken across all of them, and a
+        # replica that skipped a step would leave the others waiting on a message
+        # that never arrives. So it runs a forward pass over one token instead.
+        parallel = vllm_config.parallel_config
+        self.lockstep = parallel.enable_expert_parallel and self.data_parallel_size > 1
+        #: Rounds in which at least one replica had work, so the others paid a dummy
+        #: step. Counted for the stats; see `_lockstep_round` for what is deliberately
+        #: *not* counted.
+        self.lockstep_rounds = 0
+
         #: Where the scan starts. Upstream rotates this per request to break ties;
         #: here the in-flight counter below is incremented on every routed request,
         #: so the previously-chosen replica already scores strictly higher and the
@@ -207,11 +218,43 @@ class DPInprocClient(EngineCoreClient):
         already reflect that, since each spends only its own duration.
         """
         merged: dict[int, EngineCoreOutputs] = {}
+        if self.lockstep:
+            return self._lockstep_round(merged)
         for engine_core in self.engine_cores:
             if not engine_core.has_requests():
                 continue
             outputs, _ = engine_core.step()
             self._merge(merged, outputs)
+        return merged
+
+    def _lockstep_round(
+        self, merged: dict[int, EngineCoreOutputs]
+    ) -> dict[int, EngineCoreOutputs]:
+        """One round in which every replica steps, or none does. R13.4.
+
+        A replica with work takes its step; a replica without one runs a dummy
+        forward pass, because the collective needs it present.
+
+        **The drain tail is deliberately not modeled.** Upstream only learns that
+        every replica is finished at a periodic all-reduce -- every 32 steps in
+        `_has_global_unfinished_reqs` -- so on real hardware the group keeps running
+        dummy steps for up to 31 rounds after the last request completes. That is real
+        device time, but it delays no request: charging it here would inflate the
+        latency of whichever request happened to finish last, which is the wrong
+        number to move. It costs utilisation, not latency, and utilisation is not a
+        thing this simulator reports.
+        """
+        local_work = [engine.has_requests() for engine in self.engine_cores]
+        if not any(local_work):
+            return merged
+
+        self.lockstep_rounds += 1
+        for engine_core, has_work in zip(self.engine_cores, local_work, strict=True):
+            if has_work:
+                outputs, _ = engine_core.step()
+                self._merge(merged, outputs)
+            else:
+                engine_core.execute_dummy_batch()
         return merged
 
     async def get_output_async(self) -> dict[int, EngineCoreOutputs]:
@@ -307,6 +350,20 @@ class DPInprocClient(EngineCoreClient):
             float(engine.get("elapsed", 0.0)) for engine in per_engine
         )
         stats["data_parallel_size"] = self.data_parallel_size
+        # R13.4. What the replicas spent keeping the collective whole rather than
+        # serving anyone. Surfaced per replica because the imbalance is the point: a
+        # deployment can be at full device utilisation and near-zero goodput, and
+        # upstream's metrics do not say so anywhere.
+        stats["lockstep"] = self.lockstep
+        stats["num_dummy_steps"] = sum(
+            engine.num_dummy_steps for engine in self.engine_cores
+        )
+        stats["dummy_step_seconds"] = sum(
+            engine.dummy_step_seconds for engine in self.engine_cores
+        )
+        stats["per_engine_dummy_steps"] = [
+            engine.num_dummy_steps for engine in self.engine_cores
+        ]
         #: Per replica, so an imbalance is visible rather than averaged away -- which
         #: is the failure mode a DP experiment is looking for.
         stats["per_engine_running"] = [

@@ -281,6 +281,15 @@ class Worker:
         assert self.model_runner is not None
         return await self.model_runner.execute_model_async(scheduler_output)
 
+    def execute_dummy_batch(self) -> float:
+        """R13.4. A forward pass over nothing, to keep an EP collective whole.
+
+        Returns the modeled duration, which the device has already charged to the
+        clock -- reported so the deployment can count what its idle replicas spent.
+        """
+        assert self.model_runner is not None
+        return self.model_runner.execute_dummy_batch().duration
+
     def check_health(self) -> None:
         return None
 
