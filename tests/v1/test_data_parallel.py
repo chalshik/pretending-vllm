@@ -253,9 +253,28 @@ def test_a_real_clock_with_replicas_refuses_rather_than_misleading():
         LLM(**BASE, data_parallel_size=2, clock_mode="real")
 
 
-def test_expert_parallelism_still_refuses():
-    with pytest.raises(NotImplementedError, match="expert parallelism"):
-        ParallelConfig(enable_expert_parallel=True)
+def test_expert_parallelism_widens_the_group_across_the_replicas():
+    """R13.4. This is the part of EP that surprises: the replicas stop being
+    independent copies and jointly shard one set of experts, so the EP group spans
+    both the tensor and data dimensions -- `ep_size = dp * tp`, which is what
+    upstream's `FusedMoEParallelConfig.make` derives after flattening TP across DP."""
+    assert (
+        ParallelConfig(
+            enable_expert_parallel=True, data_parallel_size=2, tensor_parallel_size=2
+        ).expert_parallel_size
+        == 4
+    )
+    # `world_size` stays per replica: EP does not change how many devices a replica
+    # spans, only what lives on them.
+    assert (
+        ParallelConfig(
+            enable_expert_parallel=True, data_parallel_size=2, tensor_parallel_size=2
+        ).world_size
+        == 2
+    )
+    # Off, and on a single device, it is 1 -- upstream ignores the flag there too.
+    assert ParallelConfig(data_parallel_size=4).expert_parallel_size == 1
+    assert ParallelConfig(enable_expert_parallel=True).expert_parallel_size == 1
 
 
 async def test_the_http_surface_serves_over_replicas():

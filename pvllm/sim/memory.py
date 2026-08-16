@@ -94,18 +94,51 @@ class MemoryProfile:
         )
 
 
-def compute_weight_bytes(model: ModelCard, dtype: str, tp_size: int = 1) -> int:
+def compute_weight_bytes(
+    model: ModelCard, dtype: str, tp_size: int = 1, ep_size: int | None = None
+) -> int:
     """Parameter bytes resident on one device.
 
     Tensor parallelism shards the layers but not the embedding tables, so the
     embedding term is excluded from the division. Dividing everything by TP is the
     common shortcut and it understates per-device memory on models with large
     vocabularies -- 128k-vocab models put over a gigabyte in embeddings alone.
+
+    R13.4. Under expert parallelism the experts are divided differently from
+    everything else: each device owns whole experts rather than a slice of every one,
+    across `ep_size = data_parallel_size * tensor_parallel_size` devices, while
+    attention and the norms keep sharding by `tp_size`. For a sparse MoE that is the
+    dominant term by a wide margin -- Mixtral-8x7B is 46.7B parameters of which 45.1B
+    are experts -- so it is the difference between the model fitting and not.
     """
     dtype_bytes = DTYPE_BYTES[dtype]
     embedding = model.embedding_parameters
-    sharded = model.num_parameters - embedding
-    return int(embedding * dtype_bytes + (sharded * dtype_bytes) // tp_size)
+    # The router is excluded: it is a per-layer linear every rank computes in full,
+    # so it belongs with the dense weights however the experts are divided.
+    experts = model.num_hidden_layers * model.expert_parameters_per_layer
+    dense = model.num_parameters - embedding - experts
+    # `None` means "not expert-parallel", and the experts then shard by `tp_size`
+    # like every other layer -- which is what tensor parallelism does to an MoE. A
+    # default of 1 here would leave them *unsharded* whenever EP was off, so a
+    # `--tensor-parallel-size 8` MoE would report 85 GiB per device instead of 11 and
+    # refuse to start on hardware that fits it.
+    expert_divisor = tp_size if ep_size is None else max(1, ep_size)
+    if ep_size is None or not model.is_moe:
+        local_experts = experts // expert_divisor
+    else:
+        # Ceiling, and per *expert* rather than per byte: a rank owns whole experts,
+        # so 8 experts over 3 ranks is 3/3/2 and the device that has to fit the model
+        # is the one holding 3. Flooring would report the average and promise a fit
+        # the busiest rank does not have -- and at ep > num_experts it would report
+        # zero expert bytes for a rank that still holds one whole expert.
+        per_rank = -(-model.num_experts // expert_divisor)
+        one_expert = model.expert_parameters_per_layer // max(1, model.num_experts)
+        local_experts = model.num_hidden_layers * per_rank * one_expert
+    return int(
+        embedding * dtype_bytes
+        + (dense * dtype_bytes) // tp_size
+        + local_experts * dtype_bytes
+    )
 
 
 def compute_activation_peak_bytes(
@@ -203,6 +236,7 @@ def compute_memory_profile(
     lora_bytes: int = 0,
     sliding_window: int | None = None,
     kv_cache_groups: Sequence[Any] | None = None,
+    ep_size: int = 1,
 ) -> MemoryProfile:
     """Derive the KV pool and `num_gpu_blocks`. R10.2, R10.5, R10.6.
 
@@ -226,9 +260,15 @@ def compute_memory_profile(
     # not 3. Flooring reported a pool the engine could not actually build, and
     # `num_gpu_blocks` then disagreed with the pool the scheduler was handed.
     layers_local = -(-model.num_hidden_layers // pp_size)
-    weight_bytes = (compute_weight_bytes(model, dtype, tp_size) * layers_local) // max(
-        1, model.num_hidden_layers
-    )
+    # R13.4. `ep_size > 1` means expert-parallel; `None` tells `compute_weight_bytes`
+    # to shard the experts by `tp_size` like everything else. Passing 1 would leave
+    # them unsharded, which is the trap that function's own comment names.
+    weight_bytes = (
+        compute_weight_bytes(
+            model, dtype, tp_size, ep_size=ep_size if ep_size > 1 else None
+        )
+        * layers_local
+    ) // max(1, model.num_hidden_layers)
     activation_peak = compute_activation_peak_bytes(
         model, dtype, max_num_batched_tokens, max_num_seqs, tp_size
     )

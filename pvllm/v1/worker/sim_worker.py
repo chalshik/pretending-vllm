@@ -92,6 +92,8 @@ class Worker:
             kv_cache_dtype=self.cache_config.resolved_cache_dtype,
             tp_size=self.parallel_config.tensor_parallel_size,
             pp_size=self.parallel_config.pipeline_parallel_size,
+            ep_size=self.parallel_config.expert_parallel_size,
+            dp_size=self.parallel_config.data_parallel_size,
             jitter_sigma=self.sim_config.jitter_sigma,
             enforce_eager=self.model_config.enforce_eager,
         )
@@ -127,6 +129,18 @@ class Worker:
                         f"startup, so reporting a capacity number for it would "
                         f"describe an engine that cannot run."
                     )
+        # R13.4. Upstream's `_verify_with_expert_parallelism`: "Number of experts in
+        # the model must be greater than 0 when expert parallelism is enabled".
+        # Checked here rather than in ParallelConfig because only the model card knows
+        # whether there are experts to spread.
+        if self.parallel_config.enable_expert_parallel and not model_card.is_moe:
+            raise ValueError(
+                f"enable_expert_parallel needs a mixture-of-experts model, and "
+                f"{model_card.name!r} declares num_experts=0. There is nothing to "
+                f"spread across devices; use --tensor-parallel-size to shard a dense "
+                f"model."
+            )
+
         pp_size = self.parallel_config.pipeline_parallel_size
         if pp_size > model_card.num_hidden_layers:
             raise ValueError(
@@ -199,6 +213,7 @@ class Worker:
             num_gpu_blocks_override=self.cache_config.num_gpu_blocks_override,
             lora_bytes=self._lora_bytes(),
             sliding_window=self.cache_config.sliding_window,
+            ep_size=self.parallel_config.expert_parallel_size,
             # R6.7. The same groups the engine core sizes the pool from, so the
             # startup line and the scheduler's pool cannot disagree.
             kv_cache_groups=get_kv_cache_groups(self.get_kv_cache_spec()),
@@ -297,6 +312,11 @@ class Worker:
                 self.model_card,
                 self.model_config.resolved_dtype,
                 self.parallel_config.tensor_parallel_size,
+                ep_size=(
+                    self.parallel_config.expert_parallel_size
+                    if self.parallel_config.enable_expert_parallel
+                    else None
+                ),
             )
             // self.parallel_config.pipeline_parallel_size
         )

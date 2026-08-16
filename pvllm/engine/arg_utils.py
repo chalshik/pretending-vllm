@@ -84,6 +84,7 @@ class EngineArgs:
     tensor_parallel_size: int = 1
     pipeline_parallel_size: int = 1
     data_parallel_size: int = 1
+    enable_expert_parallel: bool = False
 
     # --- observability -------------------------------------------------------
     disable_log_stats: bool = False
@@ -165,6 +166,7 @@ class EngineArgs:
             tensor_parallel_size=self.tensor_parallel_size,
             pipeline_parallel_size=self.pipeline_parallel_size,
             data_parallel_size=self.data_parallel_size,
+            enable_expert_parallel=self.enable_expert_parallel,
         )
 
         assert model_config.max_model_len is not None

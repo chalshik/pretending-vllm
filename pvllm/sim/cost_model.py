@@ -199,6 +199,8 @@ class RooflineCostModel(CostModel):
         kv_cache_dtype: str | None = None,
         tp_size: int = 1,
         pp_size: int = 1,
+        ep_size: int = 1,
+        dp_size: int = 1,
         jitter_sigma: float = 0.0,
         enforce_eager: bool = False,
     ) -> None:
@@ -207,6 +209,13 @@ class RooflineCostModel(CostModel):
         self.dtype = dtype
         self.tp_size = tp_size
         self.pp_size = pp_size
+        #: R13.4. `data_parallel_size * tensor_parallel_size` when expert parallelism
+        #: is on, else 1. The experts divide by this instead of by `tp_size`.
+        self.ep_size = ep_size
+        #: Needed here only because the EP collective carries the *union* of the
+        #: replicas' batches, which is the one place a replica's cost depends on how
+        #: many other replicas there are.
+        self.dp_size = dp_size
         self.jitter_sigma = jitter_sigma
         self.enforce_eager = enforce_eager
 
@@ -234,10 +243,23 @@ class RooflineCostModel(CostModel):
 
         # Every stage's weights are read once per step, so the traffic for a full
         # traversal is the whole (TP-sharded) weight set regardless of `pp_size`.
-        self.weight_bytes_local = compute_weight_bytes(model, dtype, tp_size)
+        expert_shard = ep_size if ep_size > 1 else None
+        self.weight_bytes_local = compute_weight_bytes(
+            model, dtype, tp_size, ep_size=expert_shard
+        )
         # MoE reads only the routed experts per token, so the *active* count is what
         # the compute term uses -- which is why an MoE is far cheaper to run than its
         # parameter count suggests.
+        #
+        # R13.4. Expert parallelism does **not** reduce per-device MoE FLOPs, and the
+        # arithmetic is worth writing down because dividing by `ep_size` here is the
+        # obvious wrong move. Under TP each rank holds every expert sliced to `I/tp`
+        # and runs `tokens * top_k` pairs through the slice: work = total/tp. Under EP
+        # each rank holds `E/ep` whole experts and runs the `tokens_total * top_k /
+        # ep` pairs that route to them at full width: work = total/ep -- but
+        # `tokens_total` is the union across the `dp` replicas, so with `ep = dp * tp`
+        # the two land on the same number. EP moves *where* the weights live, not how
+        # much arithmetic each device does.
         self.active_params_local = model.num_active_parameters // tp_size
 
     def step_cost(
@@ -286,6 +308,29 @@ class RooflineCostModel(CostModel):
             t_comm += (
                 handoffs * tokens * self.model.hidden_size * self.dtype_bytes / link
             )
+        if self.ep_size > 1 and self.model.is_moe and self.dp_size > 1:
+            # R13.4. Under expert parallelism the MoE layer's all-reduce is *replaced*
+            # by a dispatch/combine pair -- an all-gatherv and a reduce-scatterv over
+            # the EP group on upstream's default `allgather_reducescatter` backend.
+            # A ring all-reduce is a reduce-scatter followed by an all-gather, so the
+            # byte volume is the same collective by another name: EP does not make
+            # the MoE layer's communication bigger, it makes it *wider*.
+            #
+            # What changes is the token set. The EP group spans the data-parallel
+            # replicas, so the collective carries the union of their batches rather
+            # than one replica's -- `dp_size` times the tokens. That is the whole cost
+            # of EP, and it is why `--data-parallel-size 8 --enable-expert-parallel`
+            # is a different proposition from `--tensor-parallel-size 8`.
+            #
+            # At `dp_size == 1` there is no all-to-all at all: upstream's
+            # `use_all2all_kernels` requires `dp_size > 1` and the layer issues the
+            # same single all-reduce it would without EP. So this term is skipped, and
+            # a TP-only EP run reports the same duration as the TP run -- which is
+            # what upstream does, and is asserted in the tests.
+            extra_tokens = tokens * (self.dp_size - 1)
+            t_comm += (
+                extra_tokens * self.model.hidden_size * self.dtype_bytes / link
+            ) * self.layers_local
 
         # --- encoder ---------------------------------------------------------
         # R18.1. A vision encoder is a separate forward pass over the image patches,
@@ -349,6 +394,8 @@ def build_cost_model(
     kv_cache_dtype: str | None = None,
     tp_size: int = 1,
     pp_size: int = 1,
+    ep_size: int = 1,
+    dp_size: int = 1,
     jitter_sigma: float = 0.0,
     enforce_eager: bool = False,
 ) -> CostModel:
@@ -363,6 +410,8 @@ def build_cost_model(
             kv_cache_dtype=kv_cache_dtype,
             tp_size=tp_size,
             pp_size=pp_size,
+            ep_size=ep_size,
+            dp_size=dp_size,
             jitter_sigma=jitter_sigma,
             enforce_eager=enforce_eager,
         )

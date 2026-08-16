@@ -110,7 +110,6 @@ def test_invalid_values_are_rejected(factory, match):
 @pytest.mark.parametrize(
     ("factory", "match"),
     [
-        (lambda: ParallelConfig(enable_expert_parallel=True), "expert parallelism"),
         (lambda: SchedulerConfig(async_scheduling=True), "async scheduling"),
     ],
 )

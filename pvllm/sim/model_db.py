@@ -156,6 +156,21 @@ class ModelCard:
         return self.num_experts * one_expert + router
 
     @property
+    def router_parameters_per_layer(self) -> int:
+        """The gate that scores experts. Zero for a dense model.
+
+        Split out because expert parallelism divides the experts and *not* this: the
+        router is a per-layer linear every rank computes in full, so folding it into
+        the expert lump would shard something that is replicated.
+        """
+        return self.hidden_size * self.num_experts if self.is_moe else 0
+
+    @property
+    def expert_parameters_per_layer(self) -> int:
+        """Every expert's weights for one layer, router excluded. R13.4."""
+        return self.mlp_parameters_per_layer - self.router_parameters_per_layer
+
+    @property
     def active_mlp_parameters_per_layer(self) -> int:
         """MLP parameters actually touched per token.
 

@@ -15,9 +15,11 @@ See [UPSTREAM.md](UPSTREAM.md).
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, KV
-> disaggregation, `n > 1`, `/v1/embeddings`, hybrid full/windowed models, and data parallelism all
-> work. Expert parallelism, real KV transports, a KV connector paired with a sliding window, and
-> data parallelism over the multiprocess core are not implemented and refuse by name.
+> disaggregation, `n > 1`, `/v1/embeddings`, hybrid full/windowed models, data parallelism, and
+> expert parallelism all work. Real KV transports, a KV connector paired with a sliding window,
+> and data parallelism over the multiprocess core are not implemented and refuse by name. The
+> dummy-batch cost that expert parallelism imposes on an idle replica is not modeled, so an
+> unevenly loaded DP+EP deployment is reported optimistically.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -170,6 +172,7 @@ observable rather than approximated.
 | | what it changes |
 |---|---|
 | `--data-parallel-size N` | N whole engines behind a load-aware router: throughput multiplies, per-request latency does not — and the prefix cache is partitioned N ways, so a shared preamble is recomputed on every replica that sees one |
+| `--enable-expert-parallel` | an MoE's experts are spread across `dp × tp` devices instead of sliced on every one — a Mixtral-class model goes from 87 GiB of weights per device to 13.5, which is the difference between fitting on an 80 GiB card and not |
 | `--tensor-parallel-size` | shards KV and weights per device; near-linear speedup on prefill, sublinear on decode |
 | `--pipeline-parallel-size` | shards layers per device; **same step latency**, less memory (no microbatch overlap is modeled) |
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |

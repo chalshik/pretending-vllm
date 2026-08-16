@@ -23,6 +23,20 @@ reproduced here rather than assumed:
   penalises a queue in proportion to KV pressure. That policy is ported verbatim,
   because "which replica gets this request" is exactly what a DP experiment asks.
 
+**Expert parallelism changes what these replicas are, and one thing is not yet
+modeled.** With `--enable-expert-parallel` the replicas stop being independent copies
+and become shards of one expert set (R13.4), which is why the memory picture improves
+so sharply. Upstream then requires them to step in *lockstep*: the MoE collective is
+taken across every EP rank, so a replica with no work of its own cannot skip a step --
+it runs a dummy single-token forward pass (`execute_dummy_batch`) to keep the
+collective whole. That dummy step is real device time spent producing nothing.
+
+pvllm does not model it yet. `get_output` below steps only replicas that have work, so
+an *unevenly loaded* DP+EP deployment is reported optimistically: the idle replicas
+cost nothing here and would cost a dummy step in production. Evenly loaded, the numbers
+are right. This is the same shape of gap as pipeline parallelism's unmodeled microbatch
+overlap -- named here rather than left for a reader to discover.
+
 **Clock.** Each replica owns its own clock, because each models its own device, and
 the deployment's elapsed time is the *slowest* replica's rather than the sum -- they
 run concurrently. Under a real or scaled clock they would have to run concurrently in
