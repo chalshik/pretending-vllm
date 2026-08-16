@@ -19,6 +19,7 @@ from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
 from pvllm.v1.kv_cache_interface import (
     FullAttentionSpec,
     KVCacheSpec,
+    MambaSpec,
     MLAAttentionSpec,
     SlidingWindowSpec,
 )
@@ -94,6 +95,28 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
     if cache_config.sliding_window is not None:
         uniform: KVCacheSpec = windowed(cache_config.sliding_window)
         return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+
+    if card is not None and card.is_state_space:
+        # R6.7. Attention layers cache KV; Mamba layers hold a fixed recurrent state;
+        # MLP layers hold neither and so produce no spec at all. The pattern string is
+        # what the model publishes, and reading it here keeps the layer identity in one
+        # place.
+        assert card.hybrid_override_pattern is not None
+        state_spec = MambaSpec(
+            block_size=block_size,
+            state_bytes=card.mamba_state_bytes_per_layer(
+                parallel_config.tensor_parallel_size
+            ),
+            page_size_padded=cache_config.mamba_page_size_padded,
+        )
+        attention_spec = full()
+        layered: dict[str, KVCacheSpec] = {}
+        for index, kind in enumerate(card.hybrid_override_pattern[:num_layers]):
+            if kind == "M":
+                layered[f"model.layers.{index}.mixer"] = state_spec
+            elif kind == "*":
+                layered[f"model.layers.{index}.self_attn"] = attention_spec
+        return layered
 
     if card is not None and card.is_hybrid_attention:
         assert card.sliding_window is not None

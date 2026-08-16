@@ -18,7 +18,10 @@ from pvllm.v1.core.single_type_kv_cache_manager import (
     SingleTypeKVCacheManager,
     get_manager_for_kv_cache_spec,
 )
-from pvllm.v1.kv_cache_interface import KVCacheConfig, SlidingWindowSpec
+from pvllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheConfig,
+)
 
 
 class KVCacheCoordinator:
@@ -71,7 +74,14 @@ class KVCacheCoordinator:
             current = hit_length
             for group_id, manager in enumerate(self.single_type_managers):
                 spec = self.kv_cache_config.kv_cache_groups[group_id].kv_cache_spec
-                if not isinstance(spec, SlidingWindowSpec) and (
+                # A *positive* test. Written as "not sliding window" it would sweep
+                # a state-space group into the full-attention shortcut, looking it up
+                # once and then only min-ing -- leaving a block list from a longer
+                # candidate attached to a shorter reconciled length. Only full
+                # attention is downward-closed. `MLAAttentionSpec` subclasses
+                # `FullAttentionSpec` and belongs here; `SlidingWindowSpec` and
+                # `MambaSpec` do not.
+                if isinstance(spec, FullAttentionSpec) and (
                     blocks_by_group[group_id] is not None
                 ):
                     # Full attention is downward-closed: look it up once, then trim.
@@ -96,8 +106,8 @@ class KVCacheCoordinator:
         num_blocks = -(-hit_length // self.kv_cache_config.block_size)
         for group_id, group in enumerate(self.kv_cache_config.kv_cache_groups):
             group_blocks = blocks_by_group[group_id]
-            if group_blocks is not None and not isinstance(
-                group.kv_cache_spec, SlidingWindowSpec
+            if group_blocks is not None and isinstance(
+                group.kv_cache_spec, FullAttentionSpec
             ):
                 del group_blocks[num_blocks:]
         return tuple(blocks or [] for blocks in blocks_by_group), hit_length

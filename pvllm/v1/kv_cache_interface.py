@@ -17,9 +17,30 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class KVCacheSpec:
-    """How one kind of attention layer consumes KV cache."""
+    """How one kind of layer consumes the KV cache.
+
+    Split from `AttentionSpec` because a state-space layer is not an attention layer:
+    it has no KV heads and no head size, and its page does not scale with
+    `block_size`. Upstream splits at the same seam for the same reason.
+    """
 
     block_size: int
+
+    @property
+    def page_size_bytes(self) -> int:
+        """Bytes one block occupies, for one layer."""
+        raise NotImplementedError
+
+    @property
+    def type_id(self) -> str:
+        """Layers sharing a type id can share a KV cache group."""
+        return f"{type(self).__name__}_{self.block_size}_{self.page_size_bytes}"
+
+
+@dataclass(frozen=True)
+class AttentionSpec(KVCacheSpec):
+    """A layer that caches keys and values per token."""
+
     num_kv_heads: int
     head_size: int
     dtype: str
@@ -36,14 +57,41 @@ class KVCacheSpec:
             2 * self.block_size * self.num_kv_heads * self.head_size * self.dtype_bytes
         )
 
+
+@dataclass(frozen=True)
+class MambaSpec(KVCacheSpec):
+    """A state-space layer: a fixed recurrent state per request. R6.7.
+
+    The shape that makes it different from every other spec here is that its page does
+    **not** scale with `block_size`. An attention page is `block_size` tokens of KV; a
+    Mamba page is a conv ring buffer plus an SSM temporal state, both sized from the
+    model config alone and constant however long the context gets.
+
+    One pool cannot hold pages of two sizes, so upstream reconciles them *before* any
+    spec exists: it grows `cache_config.block_size` until an attention page is at least
+    as large as the state, then pads the state page up to match exactly. For a
+    Nemotron-H-class model that moves the block size from 16 tokens to about 1040 --
+    which changes block counts, prefix-cache granularity and every block hash value,
+    so it lands on C2 and C3 far harder than the state bytes land on the memory model.
+    `page_size_padded` carries the result of that reconciliation.
+    """
+
+    #: Bytes of recurrent state one layer holds for one request, before padding.
+    state_bytes: int
+    #: Set by the page-size unification to the common page. Never smaller than
+    #: `state_bytes`.
+    page_size_padded: int | None = None
+
     @property
-    def type_id(self) -> str:
-        """Layers sharing a type id can share a KV cache group."""
-        return f"{type(self).__name__}_{self.block_size}_{self.page_size_bytes}"
+    def page_size_bytes(self) -> int:
+        if self.page_size_padded is not None:
+            assert self.page_size_padded >= self.state_bytes
+            return self.page_size_padded
+        return self.state_bytes
 
 
 @dataclass(frozen=True)
-class FullAttentionSpec(KVCacheSpec):
+class FullAttentionSpec(AttentionSpec):
     """A standard causal attention layer: every token is attended to, forever."""
 
 
@@ -68,7 +116,7 @@ class MLAAttentionSpec(FullAttentionSpec):
 
 
 @dataclass(frozen=True)
-class SlidingWindowSpec(KVCacheSpec):
+class SlidingWindowSpec(AttentionSpec):
     """An attention layer that only attends to the last `sliding_window` tokens. R6.7.
 
     The consequential difference is not the attention pattern -- it is that KV per

@@ -157,7 +157,7 @@ def test_groups_that_cannot_share_a_page_size_are_refused_by_name():
         # reconcile the two.
         "b.0": spec(window=512, layers_head_size=128),
     }
-    with pytest.raises(NotImplementedError, match="same bytes per block"):
+    with pytest.raises(NotImplementedError, match="has to be \\*grown\\*"):
         get_kv_cache_groups(specs)
 
 

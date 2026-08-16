@@ -19,6 +19,10 @@ class CacheConfig:
     """Configuration for the KV cache."""
 
     block_size: int = DEFAULT_BLOCK_SIZE
+    #: R6.7. Set by the platform when a state-space model is loaded: the common page
+    #: every group must occupy, which the Mamba spec pads its state up to. `None` for
+    #: every model without state-space layers.
+    mamba_page_size_padded: int | None = None
     gpu_memory_utilization: float = 0.92
     cache_dtype: str = "auto"
     num_gpu_blocks_override: int | None = None

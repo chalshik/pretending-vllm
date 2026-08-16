@@ -103,12 +103,20 @@ class KVCacheManager:
             isinstance(group.kv_cache_spec, SlidingWindowSpec)
             for group in kv_cache_config.kv_cache_groups
         )
+        # R6.7. Both kinds of group hand back a placeholder rather than a block: a
+        # window for the prefix it no longer attends to, a state-space group for the
+        # boundaries it did not snapshot. Reserving the null block only for windows
+        # left a Mamba group asserting for one that was never created.
+        needs_null_block = self.has_sliding_window or any(
+            type(group.kv_cache_spec).__name__ == "MambaSpec"
+            for group in kv_cache_config.kv_cache_groups
+        )
 
         self.block_pool = BlockPool(
             kv_cache_config.num_blocks,
             enable_caching=enable_caching,
             enable_kv_cache_events=enable_kv_cache_events,
-            reserve_null_block=self.has_sliding_window,
+            reserve_null_block=needs_null_block,
         )
         self.enable_caching = enable_caching
         self.coordinator = get_kv_cache_coordinator(

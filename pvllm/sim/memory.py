@@ -377,6 +377,11 @@ def compute_memory_profile(
                     window, block_size, max_model_len, max_num_batched_tokens
                 )
                 usable_blocks_adjustment = 1
+            elif type(group.kv_cache_spec).__name__ == "MambaSpec":
+                # R6.7. One snapshot per block boundary, same arithmetic as attention
+                # once the block size is aligned -- but the *page* is a fixed state, so
+                # what a long context costs here is snapshots rather than KV.
+                blocks_for_one_request += (max_model_len + block_size - 1) // block_size
             else:
                 blocks_for_one_request += (max_model_len + block_size - 1) // block_size
     elif sliding_window is not None and sliding_window < max_model_len:

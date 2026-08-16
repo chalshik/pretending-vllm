@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import pickle
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NewType
 
 from pvllm.logger import init_logger
@@ -446,6 +446,43 @@ def get_request_block_hasher(
     return request_block_hasher
 
 
+def unify_page_sizes(specs: dict[str, KVCacheSpec]) -> dict[str, KVCacheSpec]:
+    """Make every layer occupy the same bytes per block. R6.7.
+
+    One pool cannot hold pages of two sizes, and the two kinds of layer resist
+    differently. An attention page *scales*: doubling `block_size` doubles it. A
+    state-space page does not -- it is a fixed recurrent state -- so it can only be
+    *padded*. Upstream's asymmetry, and the reason it cannot be a single rule.
+
+    The platform has usually already done the work by growing `block_size` until an
+    attention page covers the state, so in the ordinary case this only stamps the
+    padding onto the Mamba specs. It is here as well because the invariant belongs
+    next to the check that enforces it.
+    """
+    from pvllm.v1.kv_cache_interface import MambaSpec
+
+    if not specs:
+        return specs
+    max_page = max(spec.page_size_bytes for spec in specs.values())
+    if len({spec.page_size_bytes for spec in specs.values()}) == 1:
+        return specs
+
+    unified: dict[str, KVCacheSpec] = {}
+    for name, spec in specs.items():
+        if spec.page_size_bytes == max_page:
+            unified[name] = spec
+        elif isinstance(spec, MambaSpec):
+            unified[name] = replace(spec, page_size_padded=max_page)
+        else:
+            raise NotImplementedError(
+                f"layer {name!r} has a {spec.page_size_bytes}-byte page against a "
+                f"{max_page}-byte common page, and only a state-space page can be "
+                f"padded to fit. An attention page has to be *grown* by raising "
+                f"block_size, which the platform does before specs are built."
+            )
+    return unified
+
+
 def get_kv_cache_groups(
     specs: dict[str, KVCacheSpec],
 ) -> list[KVCacheGroupSpec]:
@@ -467,6 +504,8 @@ def get_kv_cache_groups(
     """
     if not specs:
         raise ValueError("the model reported no attention layers")
+
+    specs = unify_page_sizes(specs)
 
     buckets: dict[str, list[str]] = {}
     for layer_name, spec in specs.items():

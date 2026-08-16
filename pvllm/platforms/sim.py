@@ -75,6 +75,8 @@ class SimPlatform(Platform):
         # and pretending-vllm mirrors only the V2 shape. Setting the flag to 0 asks
         # for a runner that does not exist here, so say so rather than silently
         # running V2 and reporting V1.
+        cls._align_hybrid_block_size(vllm_config)
+
         if vllm_config.use_v2_model_runner is False:
             raise NotImplementedError(
                 "PVLLM_USE_V2_MODEL_RUNNER=0 requests the legacy V1 model runner "
@@ -82,6 +84,74 @@ class SimPlatform(Platform):
                 "V2 runner (vllm/v1/worker/gpu/model_runner.py), which is upstream's "
                 "default at the pinned version. See D6 in UPSTREAM.md."
             )
+
+    @classmethod
+    def _align_hybrid_block_size(cls, vllm_config: VllmConfig) -> None:
+        """Make an attention page big enough to hold a Mamba state. R6.7.
+
+        A state-space layer's page is a fixed recurrent state; an attention layer's is
+        `block_size` tokens of KV. One pool cannot hold both sizes, and the state
+        cannot shrink -- so upstream grows the *attention* block size until its page
+        covers the state, then pads the state page up to match exactly.
+
+        This runs here, at the same seam upstream uses, because it has to happen before
+        any spec is built: `get_kv_cache_spec` reads `cache_config.block_size`, and the
+        engine core resolves the pool from the specs it returns.
+
+        The consequence is much larger than the padding it saves. A Nemotron-H-class
+        model moves from a 16-token block to roughly 1040, which changes how many
+        blocks a request holds (C2), how coarse the prefix cache is, and -- because a
+        block hash is computed over `block_size` tokens -- every block hash value (C3).
+        A run that kept `block_size` at 16 would be wrong on all three even with the
+        state bytes right.
+        """
+        from pvllm.sim.model_db import DTYPE_BYTES, load_model_card
+
+        # Tolerant of a partial config: `check_and_update_config` is the platform's
+        # hook and is called with whatever the caller has built, which in tests is
+        # sometimes only the parallel config. Nothing to align without a model.
+        model_config = getattr(vllm_config, "model_config", None)
+        cache_config = getattr(vllm_config, "cache_config", None)
+        if model_config is None or cache_config is None:
+            return
+        sim_config = getattr(vllm_config, "sim_config", None)
+        try:
+            card = load_model_card(
+                (sim_config.model_card if sim_config else None) or model_config.model
+            )
+        except (KeyError, FileNotFoundError):
+            return
+        if not card.is_state_space:
+            return
+
+        tp_size = vllm_config.parallel_config.tensor_parallel_size
+        state_bytes = card.mamba_state_bytes_per_layer(tp_size)
+
+        kv_dtype = cache_config.resolved_cache_dtype or model_config.resolved_dtype
+        attention_bytes_per_token = (
+            2
+            * max(1, card.num_key_value_heads // tp_size)
+            * card.head_dim
+            * DTYPE_BYTES[kv_dtype]
+        )
+
+        # Upstream's formula, rounded to the alignment the attention kernels want.
+        alignment = max(16, cache_config.block_size)
+        aligned = alignment * -(-state_bytes // (alignment * attention_bytes_per_token))
+        if aligned > cache_config.block_size:
+            logger.info(
+                "State-space model: block_size %d -> %d so an attention page "
+                "(%d B/token) covers one layer's %d B recurrent state (R6.7). This "
+                "changes block counts and every block hash value.",
+                cache_config.block_size,
+                aligned,
+                attention_bytes_per_token,
+                state_bytes,
+            )
+            cache_config.block_size = aligned
+        cache_config.mamba_page_size_padded = (
+            cache_config.block_size * attention_bytes_per_token
+        )
 
     @classmethod
     def get_attn_backend_cls(

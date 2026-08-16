@@ -91,6 +91,21 @@ class ModelCard:
     #: information. Both set means MLA; neither means ordinary attention.
     kv_lora_rank: int | None = None
     qk_rope_head_dim: int | None = None
+    #: R6.7. State-space (Mamba) layers. `hybrid_override_pattern` is the per-layer
+    #: string these models publish -- 'M' a Mamba layer, '*' an attention layer, '-' an
+    #: MLP layer -- and it is what makes a hybrid like Nemotron-H expressible: 24 Mamba
+    #: layers, 4 attention, 24 MLP. The rest size one layer's recurrent state, which is
+    #: constant per request however long the context gets.
+    hybrid_override_pattern: str | None = None
+    mamba_num_heads: int | None = None
+    mamba_head_dim: int | None = None
+    mamba_state_size: int | None = None
+    mamba_n_groups: int = 1
+    mamba_conv_kernel: int = 4
+    #: Families differ here and it is a factor-of-two error to get wrong: Nemotron-H
+    #: keeps the SSM state in float32 while Bamba and Falcon-H1 leave it at the model
+    #: dtype. `None` means the model dtype.
+    mamba_ssm_cache_dtype: str | None = None
     #: Set only when a card must match a published figure that the derivation misses.
     num_parameters_override: int | None = None
     provenance: str = "uncalibrated approximation"
@@ -101,6 +116,57 @@ class ModelCard:
     @property
     def is_moe(self) -> bool:
         return self.num_experts > 0
+
+    @property
+    def is_state_space(self) -> bool:
+        """R6.7. Whether any layer holds a recurrent state instead of KV."""
+        return self.num_mamba_layers > 0
+
+    @property
+    def num_mamba_layers(self) -> int:
+        if not self.hybrid_override_pattern:
+            return 0
+        return self.hybrid_override_pattern.count("M")
+
+    @property
+    def num_attention_layers(self) -> int:
+        """Layers that actually cache KV. Not `num_hidden_layers` for a hybrid."""
+        if not self.hybrid_override_pattern:
+            return self.num_hidden_layers
+        return self.hybrid_override_pattern.count("*")
+
+    def mamba_state_bytes_per_layer(self, tp_size: int = 1) -> int:
+        """One Mamba layer's recurrent state for one request. R6.7, R10.2.
+
+        Two tensors, both constant in context: a conv ring buffer
+        `(conv_kernel - 1, conv_dim / tp)` and an SSM temporal state
+        `(heads / tp, head_dim, state_size)`, where
+        `conv_dim = heads * head_dim + 2 * n_groups * state_size`.
+
+        The SSM half dominates -- 97% of the page on a Nemotron-H-class model -- and
+        it is the half whose dtype differs by family, which is why the card carries
+        `mamba_ssm_cache_dtype` separately.
+        """
+        assert self.mamba_num_heads is not None
+        assert self.mamba_head_dim is not None
+        assert self.mamba_state_size is not None
+
+        conv_bytes = DTYPE_BYTES[self.dtype]
+        ssm_bytes = DTYPE_BYTES[self.mamba_ssm_cache_dtype or self.dtype]
+
+        d_inner = self.mamba_num_heads * self.mamba_head_dim
+        conv_dim = d_inner + 2 * self.mamba_n_groups * self.mamba_state_size
+        conv_elems = (self.mamba_conv_kernel - 1) * max(1, conv_dim // tp_size)
+        ssm_elems = (
+            max(1, self.mamba_num_heads // tp_size)
+            * self.mamba_head_dim
+            * self.mamba_state_size
+        )
+        return conv_elems * conv_bytes + ssm_elems * ssm_bytes
+
+    def mamba_state_bytes(self, tp_size: int = 1) -> int:
+        """Every Mamba layer's state for one request -- the constant per-request cost."""
+        return self.num_mamba_layers * self.mamba_state_bytes_per_layer(tp_size)
 
     @property
     def use_mla(self) -> bool:
@@ -262,7 +328,10 @@ class ModelCard:
         which is exactly the sort of thing a plan gets wrong from first principles.
         """
         dtype_bytes = DTYPE_BYTES[kv_dtype] if kv_dtype else self.dtype_bytes
-        layers = self.num_hidden_layers
+        # R6.7. Attention layers only. A state-space hybrid's Mamba and MLP layers
+        # cache no KV at all, so counting every hidden layer would charge Nemotron-H
+        # for 52 layers of KV where it has 4.
+        layers = self.num_attention_layers
         if self.use_mla:
             return self.mla_head_size * dtype_bytes * layers
         kv_heads_local = max(1, self.num_key_value_heads // tp_size)

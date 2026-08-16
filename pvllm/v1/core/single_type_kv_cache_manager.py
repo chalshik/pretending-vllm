@@ -328,15 +328,78 @@ class SlidingWindowManager(FullAttentionManager):
         return 0
 
 
+class MambaManager(FullAttentionManager):
+    """Blocks for a state-space group. R6.7.
+
+    Block *accounting* is full attention's: with the block size aligned so an
+    attention page covers one state, a request holds `ceil(tokens / block_size)`
+    blocks and each of them is a snapshot of the recurrent state at that boundary.
+    What differs is the cache hit, and it differs in a way that is easy to get
+    catastrophically wrong.
+    """
+
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: list[Any],
+        max_length: int,
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        group_id: int,
+    ) -> tuple[list[KVCacheBlock], int]:
+        """The newest cached state, and nulls for everything before it. R6.4, R6.7.
+
+        A recurrent state is not a prefix -- position N's state depends on every token
+        before it, sequentially, so there is nothing to concatenate. The tempting
+        answer is therefore "no hit": return `([], 0)`.
+
+        That answer is wrong, and wrong in the direction that silently destroys a
+        number. `KVCacheCoordinator.find_longest_cache_hit` reconciles a hit across
+        *every* group, so a group reporting zero drives the whole reconciled length to
+        zero and throws away the attention groups' hits -- a hybrid model's prefix
+        cache hit rate would read exactly 0.0 for every request, and C3 calls that rate
+        exact.
+
+        What a state-space group can serve is a *snapshot*: if the state at some block
+        boundary was cached, the request resumes from there. So this scans right to
+        left for the newest cached block and returns it with null placeholders before
+        it, which is upstream's answer and which reconciles cleanly with an attention
+        group's prefix.
+        """
+        block_size = kv_cache_spec.block_size
+        null_block = block_pool.null_block
+        assert null_block is not None, (
+            "a state-space group needs the reserved null block to stand in for the "
+            "states it did not snapshot (R6.7)"
+        )
+        for index in range(max_length // block_size - 1, -1, -1):
+            cached = block_pool.get_cached_block(block_hashes[index], group_id=group_id)
+            if cached is not None:
+                return [null_block] * index + [cached], (index + 1) * block_size
+        return [], 0
+
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+        """Zero. A recurrent state is per request; there is no shared prefix to
+        run cascade attention over, and reporting one would invite an optimization
+        that cannot apply."""
+        return 0
+
+
 def get_manager_for_kv_cache_spec(
     kv_cache_spec: KVCacheSpec,
     block_pool: BlockPool,
     kv_cache_group_id: int,
 ) -> SingleTypeKVCacheManager:
     """Pick the manager for a group's spec."""
-    from pvllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+    from pvllm.v1.kv_cache_interface import (
+        FullAttentionSpec,
+        MambaSpec,
+        SlidingWindowSpec,
+    )
 
     # Order matters if the specs ever share a base; checked most specific first.
+    if isinstance(kv_cache_spec, MambaSpec):
+        return MambaManager(kv_cache_spec, block_pool, kv_cache_group_id)
     if isinstance(kv_cache_spec, SlidingWindowSpec):
         return SlidingWindowManager(kv_cache_spec, block_pool, kv_cache_group_id)
     if isinstance(kv_cache_spec, FullAttentionSpec):
