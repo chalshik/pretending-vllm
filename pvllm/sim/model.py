@@ -33,7 +33,8 @@ import numpy as np
 from pvllm.sim.grammar import generate_for_constraint
 from pvllm.sim.model_db import ModelCard
 from pvllm.sim.rng import RngFactory
-from pvllm.tokenizers.mock import BYTE_TOKEN_OFFSET, EOS_TOKEN_ID
+from pvllm.tokenizers.mock import BYTE_TOKEN_OFFSET
+from pvllm.tokenizers.mock import EOS_TOKEN_ID as MOCK_EOS_TOKEN_ID
 
 #: Sampled ids are drawn above the byte range so they render as pseudo-words rather
 #: than as raw bytes, which keeps generated text readable in a trace.
@@ -69,6 +70,13 @@ class SimModel:
     #: R11.2. Per-request `SamplingParams.seed`, when the client set one. Empty for
     #: the overwhelming majority of requests, which derive from the engine seed.
     _request_seeds: dict[str, int] = field(default_factory=dict)
+    #: R11.5. The end-of-sequence id *this deployment's tokenizer* uses, per request.
+    #: Emitting a hardcoded one was correct only while `MockTokenizer` was the only
+    #: tokenizer: the stop check compares the sampled token against
+    #: `sampling_params.eos_token_id`, which M6a made come from the real tokenizer, so
+    #: a mock id 1 against a real EOS of 151645 meant nothing ever stopped on EOS and
+    #: every request ran to its length cap.
+    _request_eos: dict[str, int] = field(default_factory=dict)
 
     #: R15. request_id -> the exact token sequence a constrained request must emit.
     #: See pvllm/sim/grammar.py for why the constraint is satisfied by generating
@@ -239,15 +247,16 @@ class SimModel:
         # indexed off the end. That IndexError escaped `execute_model` into the
         # engine step, which then wedged the whole engine for every later request,
         # constrained or not. One client's choice of max_tokens took the server down.
+        eos = self._request_eos.get(request_id, MOCK_EOS_TOKEN_ID)
         constrained = self._constrained_plans.get(request_id)
         if constrained is not None:
             if position >= len(constrained):
-                return EOS_TOKEN_ID
+                return eos
             return constrained[position]
 
         planned = self.planned_output_length(request_id, max_tokens)
         if planned < max_tokens and position + 1 >= planned:
-            return EOS_TOKEN_ID
+            return eos
 
         # Keyed by position, not drawn from the request's stream: sampling has to be
         # idempotent, or speculation would not be lossless and a recomputed request
@@ -345,6 +354,19 @@ class SimModel:
         norm = math.sqrt(sum(value * value for value in vector)) or 1.0
         return [value / norm for value in vector]
 
+    def set_request_eos(self, request_id: str, eos_token_id: int | None) -> None:
+        """Record the id this request will be stopped on. R11.5.
+
+        Taken from the request's own sampling params, which is where the engine put
+        the tokenizer's EOS -- so the token the simulator emits to end a request and
+        the token the scheduler stops on are the same number by construction, whatever
+        tokenizer is loaded. `None` means the request has no EOS (`ignore_eos`, or a
+        tokenizer that declares none), and the mock's id stands in so the length
+        policy still has something to emit.
+        """
+        if eos_token_id is not None:
+            self._request_eos[request_id] = int(eos_token_id)
+
     def set_request_seed(self, request_id: str, seed: int | None) -> None:
         """Bind a request's own `SamplingParams.seed`. R11.2, R19.2.
 
@@ -367,5 +389,6 @@ class SimModel:
         """
         self._constrained_plans.pop(request_id, None)
         self._planned_lengths.pop(request_id, None)
+        self._request_eos.pop(request_id, None)
         self._request_seeds.pop(request_id, None)
         self.rng_factory.forget_request(request_id)

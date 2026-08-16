@@ -28,6 +28,7 @@ from pvllm.multimodal.inputs import (
     MultiModalFeatureSpec,
     content_hash,
 )
+from pvllm.tokenizers.mock import MockTokenizer
 
 #: How many prompt tokens an image occupies. A fixed cost, in the region real
 #: vision-language models land in (LLaVA-1.5 uses 576, Qwen2-VL varies with
@@ -132,6 +133,31 @@ def build_multimodal_prompt(
     """
     if not _has_image(messages):
         return None, []
+
+    # R18, R3.1. This function hand-renders the chat markup, which was exactly right
+    # while `MockTokenizer` was the only tokenizer -- its `apply_chat_template`
+    # produces the same `<|role|>` markup, so the text path and this one agreed token
+    # for token. Under a real tokenizer they do not: the model's own template is
+    # something else entirely, so an image turn would render house markup while the
+    # text turn beside it rendered ChatML, sharing zero leading tokens and defeating
+    # the prefix cache across the boundary -- the precise regression the BOS fix
+    # existed to remove.
+    #
+    # Refused rather than approximated: splicing placeholder runs into arbitrary
+    # rendered template output needs a marker the template is guaranteed to pass
+    # through unchanged, and there is no such guarantee. `/v1/completions`,
+    # `/tokenize` and `/v1/embeddings` are unaffected under `slow`; so is every
+    # multimodal request under the default tokenizer.
+    if getattr(tokenizer, "name", None) is not None and not isinstance(
+        tokenizer, MockTokenizer
+    ):
+        raise NotImplementedError(
+            "multimodal chat requests need the model's own chat template to place "
+            "image placeholders, and rendering placeholders into an arbitrary "
+            "template is not implemented. Use tokenizer_mode='mock' for multimodal "
+            "traffic, or send text-only requests under tokenizer_mode='slow' -- the "
+            "token counts there are your model's."
+        )
 
     token_ids: list[int] = []
     features: list[MultiModalFeatureSpec] = []

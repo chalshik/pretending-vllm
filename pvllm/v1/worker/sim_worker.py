@@ -290,6 +290,12 @@ class Worker:
         assert self.model_runner is not None
         return self.model_runner.execute_dummy_batch().duration
 
+    async def execute_dummy_batch_async(self) -> float:
+        """As `execute_dummy_batch`, yielding while the modeled time passes."""
+        assert self.model_runner is not None
+        cost = await self.model_runner.execute_dummy_batch_async()
+        return cost.duration
+
     def check_health(self) -> None:
         return None
 

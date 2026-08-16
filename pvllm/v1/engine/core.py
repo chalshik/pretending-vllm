@@ -392,9 +392,14 @@ class EngineCore:
         request state moves -- which is what makes this safe to call on an engine
         that has nothing to do, and why it produces no output.
         """
-        seconds = self.executor.collective_rpc("execute_dummy_batch")[0]
+        seconds = self.executor.execute_dummy_batch()
+        self._record_dummy_step(float(seconds))
+        return float(seconds)
+
+    def _record_dummy_step(self, seconds: float) -> None:
+        """Count a dummy step and trace it. Shared by both step paths."""
         self.num_dummy_steps += 1
-        self.dummy_step_seconds += float(seconds)
+        self.dummy_step_seconds += seconds
         self.trace.emit(
             "step",
             t=self.clock.time(),
@@ -402,6 +407,16 @@ class EngineCore:
             dummy=True,
             num_scheduled_tokens=0,
         )
+
+    async def execute_dummy_batch_async(self) -> float:
+        """`execute_dummy_batch`, yielding while the modeled time passes.
+
+        Same reason `step_async` exists: under a real or scaled clock the duration is
+        spent by sleeping, and doing that synchronously in the server would stop it
+        serving for the length of the step.
+        """
+        seconds = await self.executor.execute_dummy_batch_async()
+        self._record_dummy_step(float(seconds))
         return float(seconds)
 
     # --- introspection -------------------------------------------------------

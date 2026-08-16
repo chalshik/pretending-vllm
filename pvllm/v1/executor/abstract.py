@@ -79,6 +79,26 @@ class Executor(ABC):
     def compile_or_warm_up_model(self) -> None:
         """Simulate graph capture and warm-up. R8.4."""
 
+    def execute_dummy_batch(self) -> float:
+        """R13.4. A forward pass over nothing, to keep an EP collective whole.
+
+        Concrete rather than abstract, and refusing: only the executors that model a
+        device can charge for one, and an executor that cannot must say so rather than
+        return a plausible zero -- a zero here would report an idle expert-parallel
+        replica as free, which is the whole thing the dummy step exists to price.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot execute a dummy batch, which expert "
+            f"parallelism needs to keep its collective whole (requirement R13.4)"
+        )
+
+    async def execute_dummy_batch_async(self) -> float:
+        """As `execute_dummy_batch`, yielding while the modeled time passes."""
+        raise NotImplementedError(
+            f"{type(self).__name__} cannot execute a dummy batch, which expert "
+            f"parallelism needs to keep its collective whole (requirement R13.4)"
+        )
+
     @abstractmethod
     def execute_model(self, scheduler_output: SchedulerOutput) -> ModelRunnerOutput:
         """Run one step. The simulation boundary."""

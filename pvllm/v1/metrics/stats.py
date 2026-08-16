@@ -68,6 +68,11 @@ class FinishedRequestStats:
     num_cached_tokens: int = 0
     max_tokens_param: int | None = None
     n_param: int = 1
+    #: R11.7. Whether *this* record should contribute the `n` observation. Every child
+    #: of an `n > 1` request produces a record (upstream counts them all), but only one
+    #: of them reports the `n`, or `vllm:request_params_n` would see `n` observations
+    #: of the same value instead of one.
+    observe_n_param: bool = True
 
 
 @dataclass

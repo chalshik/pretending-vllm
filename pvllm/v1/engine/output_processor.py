@@ -209,8 +209,18 @@ class OutputProcessor:
         """
         to_abort: list[str] = []
         for request_id in request_ids:
-            if self.request_states.pop(request_id, None) is not None:
+            state = self.request_states.pop(request_id, None)
+            if state is not None:
                 to_abort.append(request_id)
+                # R11.7. A cancelled `n > 1` request is aborted by *child* id -- that
+                # is what `generate`'s finally has to hand -- so popping only the id
+                # it was given left the parent behind forever. `request_states` and
+                # the core both drained, so nothing else signalled the growth.
+                parent = state.parent_request
+                if parent is not None:
+                    parent.child_requests.discard(request_id)
+                    if not parent.child_requests:
+                        self.parent_requests.pop(parent.request_id, None)
                 continue
             parent = self.parent_requests.pop(request_id, None)
             if parent is not None:
@@ -383,17 +393,29 @@ class OutputProcessor:
         """Drop a finished request's frontend state and record what it contributed."""
         state.is_finished = True
         parent = state.parent_request
-        # R11.7. One observation per *client* request, recorded when the last child
-        # lands -- upstream's `observe_finished_request` gates the same way. One per
-        # child would count an `n=4` request four times in every request-level
-        # histogram, so e2e latency and time-per-output-token would be weighted by n.
         last_of_its_parent = parent is None or not parent.child_requests
         if parent is not None and last_of_its_parent:
             self.parent_requests.pop(parent.request_id, None)
-        if iteration_stats is not None and last_of_its_parent:
-            iteration_stats.finished_requests.append(
-                state.finished_stats(now, str(finish_reason))
-            )
+
+        # R11.7, C6. Two observations with two different cardinalities, and collapsing
+        # them into one gate is how this was wrong before.
+        #
+        # A *record* per child: upstream calls `_update_stats_from_finished`
+        # unconditionally inside its per-output loop, so `vllm:request_success_total`,
+        # the e2e/queue/prefill/decode histograms and the token histograms all see `n`
+        # observations for an `n`-way request. Gating those on the last child made a
+        # dashboard built against real vLLM read a third of the true completion rate
+        # under `n=3` traffic, and sampled every latency histogram from whichever
+        # child happened to finish last.
+        #
+        # The *value of `n`* once per client request: that is the only thing upstream
+        # gates, in `ParentRequest.observe_finished_request`. Observing it per child
+        # would report `n=1` three times for an `n=3` request.
+        if iteration_stats is not None:
+            stats = state.finished_stats(now, str(finish_reason))
+            stats.n_param = parent.n if parent is not None else 1
+            stats.observe_n_param = last_of_its_parent
+            iteration_stats.finished_requests.append(stats)
         self.request_states.pop(request_id, None)
 
     def take_stopped_by_string(self) -> list[str]:

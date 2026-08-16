@@ -156,16 +156,22 @@ class SimModelRunner:
         step costs roughly what a decode step costs. That is the whole reason an
         idle replica under EP is expensive.
         """
+        return self.device.execute(self._dummy_profile())
+
+    def _dummy_profile(self) -> StepProfile:
+        """The shape of a dummy step: one decode's worth of tokens, one request."""
         tokens = self.decode_query_len
-        return self.device.execute(
-            StepProfile(
-                num_tokens=tokens,
-                num_reqs=1,
-                query_lens=[tokens],
-                seq_lens=[tokens],
-                is_graph_hit=not self.enforce_eager,
-            )
+        return StepProfile(
+            num_tokens=tokens,
+            num_reqs=1,
+            query_lens=[tokens],
+            seq_lens=[tokens],
+            is_graph_hit=not self.enforce_eager,
         )
+
+    async def execute_dummy_batch_async(self) -> StepCost:
+        """As `execute_dummy_batch`, awaiting the device instead of blocking."""
+        return await self.device.execute_async(self._dummy_profile())
 
     # --- persistent batch maintenance (R7.3) ---------------------------------
 
@@ -205,6 +211,11 @@ class SimModelRunner:
             # exactly as it does upstream -- no extra channel, and nothing above the
             # boundary needs to know what the simulated model does with it.
             self._maybe_set_constraint(new_req.req_id, new_req.sampling_params)
+            # R11.5. The stop check compares against this exact id, so the simulator
+            # has to emit it rather than a constant of its own.
+            self.sim_model.set_request_eos(
+                new_req.req_id, getattr(new_req.sampling_params, "eos_token_id", None)
+            )
             # R11.2. And the request's own seed, if it set one -- it rides on
             # `sampling_params` like the constraint does, for the same reason.
             self.sim_model.set_request_seed(

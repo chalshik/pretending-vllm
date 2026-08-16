@@ -97,19 +97,29 @@ class KVCacheManager:
         self.block_size = kv_cache_config.block_size
         from pvllm.v1.kv_cache_interface import SlidingWindowSpec
 
-        # R6.7. A windowed group needs the null block to stand in for evicted slots,
-        # and prefix caching is off for the whole pool when any group slides: a
-        # cached block is only reusable if the prefix leading to it is still
-        # attended to, and inside a window it usually is not.
+        # R6.7. A windowed group needs the null block to stand in for evicted slots.
+        #
+        # **A known divergence from upstream, and it costs a real number.** Prefix
+        # caching is switched off for the *whole pool* when any group slides. Upstream
+        # does not do that: `find_longest_cache_hit` is per group, so a hybrid model
+        # keeps caching its full-attention groups and only the windowed ones lose it.
+        # A Gemma-3-class deployment therefore reports a 0% hit rate here where real
+        # vLLM caches roughly the fraction of layers that are full attention -- 1 in 6
+        # for `hybrid-4b`. Reproducing upstream needs per-group hit resolution, which
+        # `get_computed_blocks` does not have: it resolves one group and a hit has to
+        # be valid in every group before the scheduler may act on it.
+        #
+        # Stated here rather than discovered from a capacity plan. It is on the list.
         self.has_sliding_window = any(
             isinstance(group.kv_cache_spec, SlidingWindowSpec)
             for group in kv_cache_config.kv_cache_groups
         )
         if self.has_sliding_window and enable_caching:
             logger.info(
-                "Prefix caching disabled: this model has sliding-window attention, "
-                "and a cached block is only reusable while the prefix leading to it "
-                "is still inside the window (R6.7)."
+                "Prefix caching disabled: this model has sliding-window attention. "
+                "Upstream keeps caching a hybrid model's full-attention groups and "
+                "only this engine turns it off pool-wide (R6.7), so a hit rate "
+                "reported for a hybrid model here is a floor, not the answer."
             )
             enable_caching = False
 

@@ -327,7 +327,17 @@ class RooflineCostModel(CostModel):
             # same single all-reduce it would without EP. So this term is skipped, and
             # a TP-only EP run reports the same duration as the TP run -- which is
             # what upstream does, and is asserted in the tests.
-            extra_tokens = tokens * (self.dp_size - 1)
+            # How much of the MoE layer's collective is *not* already charged. The
+            # existing tensor-parallel term bills two all-reduces per layer, one of
+            # which is the MLP's -- so at tp > 1 only the extra `dp - 1` token-sets
+            # are new. At tp == 1 that term is zero (a single device runs no
+            # all-reduce), so the whole `dp` token-sets are new. Charging `dp - 1`
+            # unconditionally billed half the collective at dp=2 and made every
+            # sweep comparing EP against TP come out systematically cheap for EP --
+            # which is precisely the comparison EP exists to inform.
+            extra_tokens = tokens * (
+                self.dp_size - 1 if self.tp_size > 1 else self.dp_size
+            )
             t_comm += (
                 extra_tokens * self.model.hidden_size * self.dtype_bytes / link
             ) * self.layers_local

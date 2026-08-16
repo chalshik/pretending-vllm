@@ -396,7 +396,8 @@ class PrometheusStatLogger:
             self.histogram_num_generation_tokens_request.observe(
                 finished.num_generation_tokens
             )
-            self.histogram_n_request.observe(finished.n_param)
+            if finished.observe_n_param:
+                self.histogram_n_request.observe(finished.n_param)
             if finished.max_tokens_param is not None:
                 self.histogram_max_tokens_request.observe(finished.max_tokens_param)
 

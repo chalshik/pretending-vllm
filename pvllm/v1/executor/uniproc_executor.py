@@ -83,6 +83,16 @@ class UniProcExecutor(Executor):
         )
         return output
 
+    def execute_dummy_batch(self) -> float:
+        """R13.4. A forward pass over nothing, to keep an EP collective whole."""
+        seconds: float = self.driver_worker.execute_dummy_batch()
+        return seconds
+
+    async def execute_dummy_batch_async(self) -> float:
+        """As `execute_dummy_batch`, yielding while the modeled time passes."""
+        seconds: float = await self.driver_worker.execute_dummy_batch_async()
+        return seconds
+
     def check_health(self) -> None:
         self.driver_worker.check_health()
 

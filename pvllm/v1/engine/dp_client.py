@@ -259,11 +259,37 @@ class DPInprocClient(EngineCoreClient):
 
     async def get_output_async(self) -> dict[int, EngineCoreOutputs]:
         merged: dict[int, EngineCoreOutputs] = {}
+        if self.lockstep:
+            return await self._lockstep_round_async(merged)
         for engine_core in self.engine_cores:
             if not engine_core.has_requests():
                 continue
             outputs, _ = await engine_core.step_async()
             self._merge(merged, outputs)
+        return merged
+
+    async def _lockstep_round_async(
+        self, merged: dict[int, EngineCoreOutputs]
+    ) -> dict[int, EngineCoreOutputs]:
+        """`_lockstep_round`, awaiting each step. R13.4.
+
+        The async twin exists because `pvllm serve` never takes the synchronous path,
+        and lockstep landing on only one of the two meant the HTTP surface -- the one
+        an operator actually benchmarks -- reported an idle EP replica as free while
+        the offline path charged it. Every stats field said `lockstep: True` either
+        way, so nothing gave the discrepancy away.
+        """
+        local_work = [engine.has_requests() for engine in self.engine_cores]
+        if not any(local_work):
+            return merged
+
+        self.lockstep_rounds += 1
+        for engine_core, has_work in zip(self.engine_cores, local_work, strict=True):
+            if has_work:
+                outputs, _ = await engine_core.step_async()
+                self._merge(merged, outputs)
+            else:
+                await engine_core.execute_dummy_batch_async()
         return merged
 
     def _merge(

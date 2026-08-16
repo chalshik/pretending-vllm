@@ -36,6 +36,10 @@ from typing import Any
 _TIMEOUT_SECONDS = 300.0
 
 
+class StreamFailure(RuntimeError):
+    """The server reported an error *inside* an already-200 stream."""
+
+
 def add_query_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     """The options both commands share, with upstream's names and defaults."""
     parser.add_argument(
@@ -124,7 +128,16 @@ def stream_events(
             body = line[len("data:") :].strip()
             if body == "[DONE]":
                 return
-            yield json.loads(body)
+            event = json.loads(body)
+            # A stream that fails after its headers cannot use a status code, so the
+            # server sends the error as an SSE payload and then `[DONE]`. Dropping it
+            # printed a truncated answer and exited 0 -- a script could not tell a
+            # failed generation from a finished one, and `chat` kept the half-written
+            # reply as context for the next turn.
+            error = event.get("error")
+            if isinstance(error, dict):
+                raise StreamFailure(str(error.get("message") or "stream failed"))
+            yield event
 
 
 def _print_stream(
@@ -222,6 +235,16 @@ def run_complete(args: argparse.Namespace) -> int:
         except urllib.error.HTTPError as exc:
             print(_server_error(exc), file=sys.stderr)
             return 1
+        except StreamFailure as exc:
+            print(f"stream failed: {exc}", file=sys.stderr)
+            return 1
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            # The same handling the model lookup gets. Only the *first* request was
+            # guarded before, so a server restarted between two piped prompts came
+            # out as a raw urllib traceback -- the thing this module says it turns
+            # into a message.
+            print(f"cannot reach {url}: {exc}", file=sys.stderr)
+            return 1
     return 0
 
 
@@ -261,6 +284,17 @@ def run_chat(args: argparse.Namespace) -> int:
             )
         except urllib.error.HTTPError as exc:
             print(_server_error(exc), file=sys.stderr)
+            return 1
+        except StreamFailure as exc:
+            # The half-written reply is *not* appended: carrying a truncated turn
+            # forward would poison every later turn's context with text the model
+            # never finished saying.
+            conversation.pop()
+            print(f"stream failed: {exc}", file=sys.stderr)
+            return 1
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            conversation.pop()
+            print(f"cannot reach {url}: {exc}", file=sys.stderr)
             return 1
         # Kept, so the next turn carries the context -- which is also what makes the
         # prefix cache hit, and therefore what makes a multi-turn session here behave
