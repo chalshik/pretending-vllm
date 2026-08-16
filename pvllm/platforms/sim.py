@@ -94,11 +94,6 @@ class SimPlatform(Platform):
         use_mla: bool,
         has_sink: bool,
     ) -> str:
-        if use_mla:
-            raise NotImplementedError(
-                "MLA attention (DeepSeek-style) is not modeled; it changes the KV "
-                "cache shape and therefore the memory model (requirement R6.7, M4)"
-            )
         if selected_backend not in (None, "SIM", "SIM_ATTN"):
             raise NotImplementedError(
                 f"attention backend {selected_backend!r} has no simulated "

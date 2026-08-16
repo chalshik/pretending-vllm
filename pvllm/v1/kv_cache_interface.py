@@ -48,6 +48,26 @@ class FullAttentionSpec(KVCacheSpec):
 
 
 @dataclass(frozen=True)
+class MLAAttentionSpec(FullAttentionSpec):
+    """Multi-head latent attention: one compressed latent per token. R6.7.
+
+    Upstream models it as full attention with a different page size, and the
+    difference is a single factor of two: `AttentionSpec.real_page_size_bytes` is
+    `2 * block_size * num_kv_heads * head_size * dtype`, and
+    `MLAAttentionSpec.real_page_size_bytes` drops the `2` because there is one latent
+    rather than a key and a value.
+
+    `num_kv_heads` is 1 by construction -- upstream's `get_num_kv_heads` returns 1 for
+    MLA before dividing by the tensor-parallel size, so the latent is replicated on
+    every rank. `head_size` is `kv_lora_rank + qk_rope_head_dim`.
+    """
+
+    @property
+    def page_size_bytes(self) -> int:
+        return self.block_size * self.num_kv_heads * self.head_size * self.dtype_bytes
+
+
+@dataclass(frozen=True)
 class SlidingWindowSpec(KVCacheSpec):
     """An attention layer that only attends to the last `sliding_window` tokens. R6.7.
 

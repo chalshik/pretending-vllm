@@ -78,10 +78,12 @@ def test_unsupported_attention_backends_name_themselves():
         SimPlatform.get_attn_backend_cls(
             "FLASH_ATTN", 128, "bfloat16", None, 16, use_mla=False, has_sink=False
         )
-    with pytest.raises(NotImplementedError, match="MLA"):
-        SimPlatform.get_attn_backend_cls(
-            None, 128, "bfloat16", None, 16, use_mla=True, has_sink=False
-        )
+    # R6.7. MLA is modeled now -- the simulated backend serves it like any other
+    # attention, because what MLA changes is the KV cache *shape*, and that lives in
+    # the spec rather than in the backend.
+    assert SimPlatform.get_attn_backend_cls(
+        None, 128, "bfloat16", None, 16, use_mla=True, has_sink=False
+    )
 
 
 def test_unimplemented_features_raise_rather_than_no_op():

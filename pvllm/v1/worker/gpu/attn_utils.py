@@ -19,6 +19,7 @@ from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
 from pvllm.v1.kv_cache_interface import (
     FullAttentionSpec,
     KVCacheSpec,
+    MLAAttentionSpec,
     SlidingWindowSpec,
 )
 from pvllm.v1.worker.gpu.block_table import BlockTables
@@ -53,12 +54,25 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
         parallel_config.tensor_parallel_size,
         parallel_config.pipeline_parallel_size,
     )
+    card = _model_card(vllm_config)
     block_size = cache_config.block_size
     num_kv_heads = model_config.get_num_kv_heads(parallel_config.tensor_parallel_size)
     head_size = model_config.get_head_size()
     dtype_bytes = DTYPE_BYTES[kv_cache_dtype]
 
     def full() -> FullAttentionSpec:
+        if card is not None and card.use_mla:
+            # R6.7. One compressed latent per token instead of a key and a value per
+            # KV head, and `num_kv_heads=1` because upstream returns 1 for MLA
+            # *before* dividing by the tensor-parallel size -- the latent is
+            # replicated on every rank, so TP does not shrink it.
+            return MLAAttentionSpec(
+                block_size=block_size,
+                num_kv_heads=1,
+                head_size=card.mla_head_size,
+                dtype=kv_cache_dtype,
+                dtype_bytes=dtype_bytes,
+            )
         return FullAttentionSpec(
             block_size=block_size,
             num_kv_heads=num_kv_heads,
@@ -81,7 +95,6 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
         uniform: KVCacheSpec = windowed(cache_config.sliding_window)
         return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
 
-    card = _model_card(vllm_config)
     if card is not None and card.is_hybrid_attention:
         assert card.sliding_window is not None
         if scheduler_config is not None and getattr(

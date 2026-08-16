@@ -85,6 +85,12 @@ class ModelCard:
     #: with neither is ordinary full attention.
     sliding_window: int | None = None
     sliding_window_pattern: int | None = None
+    #: R6.7. Multi-head latent attention (DeepSeek-V2/V3 class). Instead of storing a
+    #: key and a value per KV head, MLA stores one *compressed latent* per token:
+    #: `kv_lora_rank` dimensions of content plus `qk_rope_head_dim` of positional
+    #: information. Both set means MLA; neither means ordinary attention.
+    kv_lora_rank: int | None = None
+    qk_rope_head_dim: int | None = None
     #: Set only when a card must match a published figure that the derivation misses.
     num_parameters_override: int | None = None
     provenance: str = "uncalibrated approximation"
@@ -95,6 +101,17 @@ class ModelCard:
     @property
     def is_moe(self) -> bool:
         return self.num_experts > 0
+
+    @property
+    def use_mla(self) -> bool:
+        """R6.7. Whether attention stores a compressed latent rather than K and V."""
+        return self.kv_lora_rank is not None and self.qk_rope_head_dim is not None
+
+    @property
+    def mla_head_size(self) -> int:
+        """The latent's width per token per layer: content plus rope."""
+        assert self.kv_lora_rank is not None and self.qk_rope_head_dim is not None
+        return self.kv_lora_rank + self.qk_rope_head_dim
 
     @property
     def is_hybrid_attention(self) -> bool:
@@ -235,10 +252,20 @@ class ModelCard:
 
         `2 *` covers key and value. KV heads are sharded across tensor-parallel ranks,
         which is why TP reduces per-device KV footprint as well as weight footprint.
+
+        **R6.7. Neither holds under MLA**, and both differences move a capacity answer
+        by a lot. There is one compressed latent rather than a key and a value, so the
+        factor of two goes; and upstream's `get_num_kv_heads` returns 1 for MLA
+        *before* it divides by `tensor_parallel_size`, so the latent is replicated on
+        every rank rather than sharded. Scaling tensor parallelism buys weights and
+        compute on a DeepSeek-class model and buys nothing at all on its KV cache --
+        which is exactly the sort of thing a plan gets wrong from first principles.
         """
         dtype_bytes = DTYPE_BYTES[kv_dtype] if kv_dtype else self.dtype_bytes
-        kv_heads_local = max(1, self.num_key_value_heads // tp_size)
         layers = self.num_hidden_layers
+        if self.use_mla:
+            return self.mla_head_size * dtype_bytes * layers
+        kv_heads_local = max(1, self.num_key_value_heads // tp_size)
         return 2 * kv_heads_local * self.head_dim * dtype_bytes * layers
 
     @classmethod

@@ -177,6 +177,7 @@ observable rather than approximated.
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |
 | `--lora-modules name=path` | each adapter is served under its own model name: `/v1/models` lists it, and a request naming it routes to it |
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
+| an MLA model (DeepSeek style) | one compressed latent per token instead of a key and a value per head — and it does **not** shard under `--tensor-parallel-size`, so scaling TP buys weights and compute and buys nothing on the KV cache |
 | a hybrid model (Gemma-3 style) | five windowed layers to every full one become six KV cache groups sharing one pool; KV per request is a blend, prefix caching resolves a hit across every group, and `--disable-hybrid-kv-cache-manager` prices the same model without it |
 | `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
 | `seed` on a request | the same seed and parameters reproduce the same completion; a seeded `n > 1` request offsets its children so they stay distinct |
