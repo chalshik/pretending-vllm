@@ -143,7 +143,9 @@ class StructuredOutputManager:
         assert structured is not None and self.backend is not None
         request_type, grammar_spec = structured.structured_output_key
         try:
-            return self.backend.compile_grammar(request_type, grammar_spec)
+            return self.backend.compile_grammar(
+                request_type, grammar_spec, request.request_id
+            )
         except Exception:
             logger.exception(
                 "failed to compile grammar for request %s", request.request_id

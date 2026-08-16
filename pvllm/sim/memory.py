@@ -145,6 +145,7 @@ def compute_lora_bytes(
     max_lora_rank: int,
     num_target_modules: int = 4,
     tp_size: int = 1,
+    pp_size: int = 1,
 ) -> int:
     """Device memory the resident LoRA adapters occupy. R16.1.
 
@@ -163,9 +164,22 @@ def compute_lora_bytes(
     if max_loras < 1 or max_lora_rank < 1:
         return 0
     hidden = model.hidden_size
-    per_projection = 2 * max_lora_rank * hidden
-    per_adapter = per_projection * num_target_modules * model.num_hidden_layers
-    return (per_adapter * DTYPE_BYTES[dtype] * max_loras) // tp_size
+    # `A` is `[d_in, r]` and `B` is `[r, d_out]`. Under tensor parallelism only *one*
+    # of them shards -- a column-parallel projection splits `B` and replicates `A`, a
+    # row-parallel one the reverse -- so half the adapter is replicated on every
+    # rank. Dividing the whole thing by `tp_size` understated per-device memory by
+    # nearly a factor of two at high TP, in the optimistic direction: the engine
+    # reported KV capacity that does not exist.
+    sharded = max_lora_rank * hidden // tp_size
+    replicated = max_lora_rank * hidden
+    per_projection = sharded + replicated
+
+    # Layers divide across pipeline stages, so a stage holds only its own share of
+    # each adapter. Charging every stage the full set overstated the cost by
+    # `pp_size` and cost real KV blocks at high PP.
+    layers_local = max(1, -(-model.num_hidden_layers // pp_size))
+    per_adapter = per_projection * num_target_modules * layers_local
+    return per_adapter * DTYPE_BYTES[dtype] * max_loras
 
 
 def compute_memory_profile(
@@ -197,7 +211,13 @@ def compute_memory_profile(
     # overstates the middle ones. The error is bounded by the embedding size and
     # shrinks as `pp_size` falls; a capacity plan for a 128k-vocab model at high
     # `pp_size` should treat the end stages as tighter than reported.
-    weight_bytes = compute_weight_bytes(model, dtype, tp_size) // pp_size
+    # Ceiling, not floor: with 28 layers over 8 stages the busiest stage holds 4,
+    # not 3. Flooring reported a pool the engine could not actually build, and
+    # `num_gpu_blocks` then disagreed with the pool the scheduler was handed.
+    layers_local = -(-model.num_hidden_layers // pp_size)
+    weight_bytes = (compute_weight_bytes(model, dtype, tp_size) * layers_local) // max(
+        1, model.num_hidden_layers
+    )
     activation_peak = compute_activation_peak_bytes(
         model, dtype, max_num_batched_tokens, max_num_seqs, tp_size
     )
@@ -247,6 +267,20 @@ def compute_memory_profile(
     # KV per request, not 128k.
     tokens_for_one_request = min(max_model_len, sliding_window or max_model_len)
     blocks_for_one_request = (tokens_for_one_request + block_size - 1) // block_size
+    #: The null block is reserved once for the whole pool, not per request, so it
+    #: comes off the pool rather than being added to each request's cost.
+    usable_blocks_adjustment = 0
+    if sliding_window is not None and sliding_window < max_model_len:
+        # A windowed request holds `ceil((window - 1) / block) + 1` blocks, not
+        # `window / block`: the live window straddles a boundary, and eviction runs
+        # *after* allocation so the outgoing block is still held when the new one is
+        # taken. This is `SlidingWindowManager.num_blocks_in_window`, and the two
+        # must agree -- under-counting here let a config start and then livelock,
+        # with the request needing a block the pool could never give and waiting
+        # forever for capacity that was not coming. R10.6 exists to refuse that at
+        # startup rather than at request time.
+        blocks_for_one_request = (sliding_window - 1 + block_size - 1) // block_size + 1
+        usable_blocks_adjustment = 1
     if num_gpu_blocks < blocks_for_one_request:
         raise SimOutOfMemoryError(
             f"The KV cache holds {num_gpu_blocks} blocks, but a single request at "
@@ -257,7 +291,13 @@ def compute_memory_profile(
             f"larger device card."
         )
 
-    max_concurrency = num_gpu_blocks * block_size / tokens_for_one_request
+    # Against the blocks a request actually *holds*, out of the blocks that can
+    # actually be handed out. Dividing the window into the raw pool overstated
+    # concurrency by up to a third on a small window -- it ignored both the straddle
+    # block and the reserved null block -- and a capacity plan reads this directly.
+    max_concurrency = (num_gpu_blocks - usable_blocks_adjustment) / max(
+        1, blocks_for_one_request
+    )
 
     return MemoryProfile(
         capacity_bytes=capacity,

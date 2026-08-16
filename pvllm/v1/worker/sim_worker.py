@@ -108,6 +108,32 @@ class Worker:
         self.model_card = model_card
         self.device_card = device_card
 
+        # R13.1. vLLM refuses a tensor_parallel_size that does not divide the head
+        # counts, and so must this: sharding 16 heads over 3 ranks drops a head, and
+        # a capacity answer for a configuration that cannot start is worse than no
+        # answer. Checked here rather than in ParallelConfig because only the model
+        # card knows the head counts.
+        tp_size = self.parallel_config.tensor_parallel_size
+        if tp_size > 1:
+            for label, count in (
+                ("attention heads", model_card.num_attention_heads),
+                ("KV heads", model_card.num_key_value_heads),
+            ):
+                if count % tp_size:
+                    raise ValueError(
+                        f"tensor_parallel_size={tp_size} does not divide the model's "
+                        f"{count} {label}. vLLM refuses this configuration at "
+                        f"startup, so reporting a capacity number for it would "
+                        f"describe an engine that cannot run."
+                    )
+        pp_size = self.parallel_config.pipeline_parallel_size
+        if pp_size > model_card.num_hidden_layers:
+            raise ValueError(
+                f"pipeline_parallel_size={pp_size} exceeds the model's "
+                f"{model_card.num_hidden_layers} layers; a stage with no layers "
+                f"holds nothing and computes nothing."
+            )
+
     def load_model(self) -> None:
         """ "Load" the weights, and spend the modeled time doing it. R10.4."""
         assert self.device is not None
@@ -256,6 +282,7 @@ class Worker:
             max_lora_rank=lora_config.max_lora_rank,
             num_target_modules=len(lora_config.target_modules),
             tp_size=self.parallel_config.tensor_parallel_size,
+            pp_size=self.parallel_config.pipeline_parallel_size,
         )
 
     def _weight_bytes(self) -> int:

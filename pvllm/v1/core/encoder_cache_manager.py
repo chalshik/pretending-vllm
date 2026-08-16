@@ -152,7 +152,13 @@ class EncoderCacheManager:
         if references is None:
             return
         references.discard(request_id)
-        if not references:
+        if not references and mm_hash not in self.freeable:
+            # Guarded, because a request may reference one entry through *two* input
+            # ids -- the same image twice in one message, which is an ordinary shape.
+            # Queueing it twice credited its size to `num_freeable_slots` twice and
+            # left a stale duplicate behind a live reference, so a later eviction
+            # tripped the "referenced entry queued for eviction" assert, or under
+            # `python -O` silently handed away embeddings a running request needed.
             self.freeable.append(mm_hash)
             self.num_freeable_slots += self._entry_size[mm_hash]
 

@@ -138,7 +138,7 @@ class SimModel:
             return planned
 
         text = generate_for_constraint(
-            kind, spec, self.rng_factory.for_request(request_id)
+            kind, spec, self.rng_factory.for_constraint(request_id)
         )
         planned = [BYTE_TOKEN_OFFSET + byte for byte in text.encode("utf-8")]
         if planned and max(planned) >= self.model.vocab_size:
@@ -226,20 +226,23 @@ class SimModel:
         every request under the default policy -- a wrong answer about the one field
         a client uses to decide whether to continue.
         """
+        # R15. The constrained plan decides its own end, *before* the generic
+        # length logic. The two used to be entangled: `planned` was
+        # `len(plan) + 1` capped at `max_tokens`, and the EOS branch below only
+        # fires when `planned < max_tokens` -- so at `max_tokens == len(plan) + 1`
+        # they collided, no EOS was emitted, and the position one past the plan
+        # indexed off the end. That IndexError escaped `execute_model` into the
+        # engine step, which then wedged the whole engine for every later request,
+        # constrained or not. One client's choice of max_tokens took the server down.
+        constrained = self._constrained_plans.get(request_id)
+        if constrained is not None:
+            if position >= len(constrained):
+                return EOS_TOKEN_ID
+            return constrained[position]
+
         planned = self.planned_output_length(request_id, max_tokens)
         if planned < max_tokens and position + 1 >= planned:
             return EOS_TOKEN_ID
-
-        # R15. The constraint decides the content. Positions past the end of the
-        # plan cannot be reached: `planned_output_length` caps the request at the
-        # plan's length, so the EOS branch above fires first -- unless max_tokens
-        # truncated it, in which case the request ends on the length cap and the
-        # output is a prefix that does not parse. That is upstream's behavior too,
-        # and a client testing "my schema does not fit in max_tokens" needs to see
-        # it rather than a quietly completed document.
-        constrained = self._constrained_plans.get(request_id)
-        if constrained is not None:
-            return constrained[position]
 
         # Keyed by position, not drawn from the request's stream: sampling has to be
         # idempotent, or speculation would not be lossless and a recomputed request
@@ -304,6 +307,14 @@ class SimModel:
         return token_ids[:k], logprobs[:k], 0
 
     def forget_request(self, request_id: str) -> None:
-        """Drop a finished request's planned length."""
+        """Drop a finished request's cached state. R15, R11.2.
+
+        Every map here is keyed by request id and none were pruned, so a server
+        doing structured-output traffic grew by roughly one document per request
+        forever -- and a harness that reuses request ids (a benchmark numbering them
+        0..n per iteration) silently got the *previous* request's document back,
+        because the cache hit before anything regenerated.
+        """
+        self._constrained_plans.pop(request_id, None)
         self._planned_lengths.pop(request_id, None)
         self.rng_factory.forget_request(request_id)

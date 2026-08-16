@@ -97,6 +97,24 @@ class RngFactory:
         entropy = _derive_entropy(self._seed, "position", f"{request_id}:{position}")
         return np.random.default_rng(np.random.SeedSequence(entropy))
 
+    def for_constraint(self, request_id: str) -> np.random.Generator:
+        """The generator a constrained request's output is drawn from. R15.
+
+        Derived from `(seed, request_id)` and *uncached*, so it is reproducible from
+        the key alone. That is what lets the grammar backend prove a schema is
+        satisfiable using the very generator generation will use: probe and
+        generation produce the same string, so a compile that passes cannot be
+        followed by a generation that fails.
+
+        Off the request's own stream deliberately. That stream is stateful, so a
+        probe run in the engine core and the generation run in the worker would
+        draw from different positions -- and a schema whose conformance depends on
+        the draw would compile on one and fail on the other, taking the engine down
+        rather than the request.
+        """
+        entropy = _derive_entropy(self._seed, "constraint", request_id)
+        return np.random.default_rng(np.random.SeedSequence(entropy))
+
     def stream(self, name: str) -> np.random.Generator:
         """An engine-level stream that is not scoped to a request.
 

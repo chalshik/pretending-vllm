@@ -54,6 +54,9 @@ class OpenAIServingCompletion:
         self.engine = engine
         self.served_model_names = served_model_names
         self._counter = 0
+        #: R16.1. Set by the server once the adapter registry exists. Absent,
+        #: only the base model is servable -- which is what a bare instance is.
+        self.models: Any = None
 
     def _next_request_id(self) -> str:
         self._counter += 1
@@ -66,8 +69,17 @@ class OpenAIServingCompletion:
     async def create_completion(
         self, request: CompletionRequest, raw_request: Request | None = None
     ) -> CompletionResponse | JSONResponse | AsyncGenerator[str, None]:
-        if request.model not in self.served_model_names:
-            return model_not_found(request.model, self.served_model_names)
+        served, lora_request = (
+            self.models.resolve(request.model)
+            if self.models is not None
+            else (request.model in self.served_model_names, None)
+        )
+        if not served:
+            return model_not_found(
+                request.model,
+                self.served_model_names
+                + (list(self.models.lora_modules) if self.models is not None else []),
+            )
 
         # The OpenAI schema allows four prompt shapes. A bare string or a flat list
         # of token ids is one prompt; a list of strings or a list of token-id lists
@@ -105,10 +117,10 @@ class OpenAIServingCompletion:
 
         if request.stream:
             return self._stream(
-                request, request_id, prompt, sampling_params, raw_request
+                request, request_id, prompt, sampling_params, raw_request, lora_request
             )
         return await self._complete(
-            request, request_id, prompt, sampling_params, raw_request
+            request, request_id, prompt, sampling_params, raw_request, lora_request
         )
 
     async def _complete(
@@ -118,11 +130,16 @@ class OpenAIServingCompletion:
         prompt: Any,
         sampling_params: SamplingParams,
         raw_request: Request | None,
+        lora_request: Any = None,
     ) -> CompletionResponse | JSONResponse:
         final: RequestOutput | None = None
         try:
             async for output in self.engine.generate(
-                prompt, sampling_params, request_id, priority=request.priority
+                prompt,
+                sampling_params,
+                request_id,
+                priority=request.priority,
+                lora_request=lora_request,
             ):
                 final = output
                 if raw_request is not None and await raw_request.is_disconnected():
@@ -167,6 +184,7 @@ class OpenAIServingCompletion:
         prompt: Any,
         sampling_params: SamplingParams,
         raw_request: Request | None,
+        lora_request: Any = None,
     ) -> AsyncGenerator[str, None]:
         created = self._created()
         model = request.model
@@ -175,7 +193,11 @@ class OpenAIServingCompletion:
 
         try:
             async for output in self.engine.generate(
-                prompt, sampling_params, request_id, priority=request.priority
+                prompt,
+                sampling_params,
+                request_id,
+                priority=request.priority,
+                lora_request=lora_request,
             ):
                 num_prompt_tokens = len(output.prompt_token_ids or ())
                 completion = output.outputs[0]

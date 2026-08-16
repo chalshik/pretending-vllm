@@ -40,6 +40,9 @@ class VllmConfig:
     device_config: DeviceConfig = field(default_factory=DeviceConfig)
     load_config: LoadConfig = field(default_factory=LoadConfig)
     lora_config: LoRAConfig | None = None
+    #: R16.1. `name=path` adapter specs from `--lora-modules`, resolved by the
+    #: serving layer -- which is the only place that knows about model names.
+    lora_modules: list[str] | None = None
     speculative_config: SpeculativeConfig | None = None
     structured_outputs_config: StructuredOutputsConfig = field(
         default_factory=StructuredOutputsConfig

@@ -64,6 +64,29 @@ _WORDS = (
     "papa",
 )
 
+#: Keywords a real grammar backend honours and this generator cannot. Listed
+#: explicitly so adding support is a deletion from this set rather than a hunt.
+_UNSUPPORTED_KEYWORDS = frozenset(
+    {
+        "multipleOf",
+        "uniqueItems",
+        "prefixItems",
+        "contains",
+        "minContains",
+        "maxContains",
+        "not",
+        "if",
+        "then",
+        "else",
+        "dependentRequired",
+        "dependentSchemas",
+        "patternProperties",
+        "propertyNames",
+        "minProperties",
+        "maxProperties",
+    }
+)
+
 #: How deep a schema may nest before this refuses. Schemas are user input, and a
 #: recursive `$ref` would otherwise recurse until the interpreter gives up.
 MAX_DEPTH = 12
@@ -146,6 +169,21 @@ def _generate(
                 )
             merged.update(value)
         return merged
+
+    # Constructs this generator does not honour. Raised rather than ignored: a
+    # schema asking for `multipleOf: 10` and getting 85 back is worse than an error,
+    # because the product only finds out when its own validator rejects the engine's
+    # output and it goes looking in the wrong place.
+    unsupported = _UNSUPPORTED_KEYWORDS & schema.keys()
+    if unsupported:
+        raise UnsupportedConstraintError(
+            f"JSON Schema keyword(s) {sorted(unsupported)} are not honoured by the "
+            f"simulated grammar backend. Generating a value that satisfies them "
+            f"needs a constraint solver; supported: type, enum, const, properties, "
+            f"required, items, minItems/maxItems, minimum/maximum, "
+            f"exclusiveMinimum/exclusiveMaximum, minLength/maxLength, pattern, "
+            f"format, anyOf, oneOf, allOf, $ref."
+        )
 
     schema_type = schema.get("type")
     if isinstance(schema_type, list):
@@ -266,9 +304,39 @@ def _generate_string(schema: dict[str, Any], rng: np.random.Generator) -> str:
     return value[:maximum]
 
 
+def _integer_bounds(schema: dict[str, Any]) -> tuple[int | None, int | None]:
+    """`(low, high)` inclusive, or `None` where the schema sets no bound.
+
+    `None` rather than a default, because defaulting the *missing* side to 0 made a
+    schema whose only bound was a negative maximum -- `{"maximum": -5}`, a perfectly
+    ordinary temperature delta -- come back as "maximum (-5) is below minimum (0);
+    no integer satisfies this", which is false. Defaults are applied afterwards,
+    relative to whichever bound exists.
+    """
+    low: int | None = None
+    high: int | None = None
+    if "minimum" in schema:
+        low = int(schema["minimum"])
+    if "exclusiveMinimum" in schema:
+        # Draft 2020-12 spells these as numbers, which is what Pydantic emits for
+        # `Field(gt=..., lt=...)`. Ignoring them produced values outside the range
+        # a product had asked for and believed it had.
+        bound = int(schema["exclusiveMinimum"]) + 1
+        low = bound if low is None else max(low, bound)
+    if "maximum" in schema:
+        high = int(schema["maximum"])
+    if "exclusiveMaximum" in schema:
+        bound = int(schema["exclusiveMaximum"]) - 1
+        high = bound if high is None else min(high, bound)
+    return low, high
+
+
 def _generate_integer(schema: dict[str, Any], rng: np.random.Generator) -> int:
-    low = int(schema.get("minimum", schema.get("exclusiveMinimum", -1) + 1))
-    high = int(schema.get("maximum", schema.get("exclusiveMaximum", low + 100) - 1))
+    low, high = _integer_bounds(schema)
+    if low is None:
+        low = 0 if high is None else min(0, high - 100)
+    if high is None:
+        high = low + 100
     if high < low:
         raise UnsupportedConstraintError(
             f"maximum ({high}) is below minimum ({low}); no integer satisfies this"
@@ -276,16 +344,39 @@ def _generate_integer(schema: dict[str, Any], rng: np.random.Generator) -> int:
     return int(rng.integers(low, high + 1))
 
 
+#: How far inside an exclusive bound a generated float lands. Small enough not to
+#: distort a narrow range, large enough to survive the rounding below -- a value
+#: exactly *on* an exclusive bound violates the schema.
+_EXCLUSIVE_EPSILON = 1e-3
+
+
 def _generate_number(schema: dict[str, Any], rng: np.random.Generator) -> float:
-    low = float(schema.get("minimum", 0.0))
-    high = float(schema.get("maximum", low + 100.0))
+    low: float | None = None
+    high: float | None = None
+    if "minimum" in schema:
+        low = float(schema["minimum"])
+    if "exclusiveMinimum" in schema:
+        bound = float(schema["exclusiveMinimum"]) + _EXCLUSIVE_EPSILON
+        low = bound if low is None else max(low, bound)
+    if "maximum" in schema:
+        high = float(schema["maximum"])
+    if "exclusiveMaximum" in schema:
+        bound = float(schema["exclusiveMaximum"]) - _EXCLUSIVE_EPSILON
+        high = bound if high is None else min(high, bound)
+
+    if low is None:
+        low = 0.0 if high is None else min(0.0, high - 100.0)
+    if high is None:
+        high = low + 100.0
     if high < low:
         raise UnsupportedConstraintError(
             f"maximum ({high}) is below minimum ({low}); no number satisfies this"
         )
     # Rounded so the value round-trips through JSON without a long float tail, which
-    # would make golden output noisy for no benefit.
-    return round(float(rng.uniform(low, high)), 4)
+    # would make golden output noisy for no benefit. Clamped afterwards because
+    # rounding can push a value back onto an exclusive bound it had cleared.
+    value = round(float(rng.uniform(low, high)), 4)
+    return min(max(value, low), high)
 
 
 def validate_against_schema(value: Any, schema: dict[str, Any] | None) -> None:
@@ -371,6 +462,14 @@ def _validate_bounds(value: float, schema: dict[str, Any], path: str) -> None:
         assert value >= schema["minimum"], f"{path}: {value} below minimum"
     if "maximum" in schema:
         assert value <= schema["maximum"], f"{path}: {value} above maximum"
+    if "exclusiveMinimum" in schema:
+        assert value > schema["exclusiveMinimum"], (
+            f"{path}: {value} not above exclusiveMinimum"
+        )
+    if "exclusiveMaximum" in schema:
+        assert value < schema["exclusiveMaximum"], (
+            f"{path}: {value} not below exclusiveMaximum"
+        )
 
 
 # --- regex -----------------------------------------------------------------

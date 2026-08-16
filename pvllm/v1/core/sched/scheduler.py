@@ -124,6 +124,11 @@ class Scheduler:
             if self.speculative_config is not None
             else 0
         )
+        self.spec_disable_by_batch_size = (
+            self.speculative_config.speculative_disable_by_batch_size
+            if self.speculative_config is not None
+            else None
+        )
 
         self.kv_cache_manager = KVCacheManager(
             kv_cache_config=kv_cache_config,
@@ -250,6 +255,17 @@ class Scheduler:
         req_index = 0
         while req_index < len(self.running) and token_budget > 0:
             request = self.running[req_index]
+
+            # R14. Speculation is turned off above a batch size, as upstream does:
+            # verification stops paying once the batch is large enough to saturate
+            # the device on its own, because the wasted work competes with real
+            # decodes. Checked per step against the *running* count, so a burst of
+            # traffic disables it and a lull turns it back on.
+            if (
+                self.spec_disable_by_batch_size is not None
+                and len(self.running) > self.spec_disable_by_batch_size
+            ):
+                request.spec_token_ids = []
 
             # R14. A decoding request with drafts in hand verifies all of them in
             # this step: one token for the position the model is at, plus one per
@@ -655,9 +671,6 @@ class Scheduler:
             request = self.requests[req_id]
             request.num_computed_tokens += num_scheduled
             request.is_prefill_chunk = request.num_computed_tokens < request.num_tokens
-            # R6.7. After the count advances, so the window is measured against what
-            # the request has actually computed. A no-op without a windowed group.
-            self.kv_cache_manager.remove_skipped_blocks(request)
 
         # Cleared only after the output has been built, so the worker still sees the
         # ids it needs to drop.
@@ -760,6 +773,16 @@ class Scheduler:
                 )
 
         self.last_num_invalid_spec_tokens = num_invalid_spec_tokens
+
+        # R6.7 + R14. Window eviction runs *here*, after the step's output has been
+        # folded back and any rejected drafts rolled off `num_computed_tokens` --
+        # not at schedule time. Scheduling inflates the count by the drafts it is
+        # about to verify, and evicting on that inflated boundary freed blocks that
+        # were still inside the true window. Those blocks went back to the pool and
+        # were handed to other requests, which is cross-request KV corruption: the
+        # exact failure the window is not allowed to cause.
+        for request in still_running:
+            self.kv_cache_manager.remove_skipped_blocks(request)
 
         # R14. The drafts the runner proposed for the *next* step. Stored on the
         # request rather than carried in the output, because whether they are still

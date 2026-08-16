@@ -45,6 +45,14 @@ class NewRequestData:
     num_computed_tokens: int
     lora_request: Any = None
 
+    #: R5.5 + R19.2. Prompt *plus* everything generated so far. Upstream carries
+    #: the same field for the same reason: the V2 runner rebuilds a resumed
+    #: request from scratch, so sending only the prompt makes it believe the
+    #: request has generated nothing. With positional sampling that is not merely
+    #: cosmetic -- the model re-samples from position 0 and the client receives a
+    #: token it has already been given.
+    prefill_token_ids: list[int] | None = None
+
     @classmethod
     def from_request(
         cls, request: Request, block_ids: tuple[list[int], ...]
@@ -53,6 +61,7 @@ class NewRequestData:
             req_id=request.request_id,
             prompt_token_ids=request.prompt_token_ids,
             mm_features=request.mm_features,
+            prefill_token_ids=list(request.all_token_ids),
             sampling_params=request.sampling_params,
             block_ids=block_ids,
             num_computed_tokens=request.num_computed_tokens,

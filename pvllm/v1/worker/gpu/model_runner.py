@@ -135,10 +135,15 @@ class SimModelRunner:
                 if new_req.sampling_params is not None
                 else 0
             ) or 0
+            # Prompt plus anything already generated. A *resumed* request has
+            # output tokens the worker never saw, and rebuilding it from the prompt
+            # alone puts its output position back at zero -- so the model
+            # re-samples position 0 and the client gets a duplicate token (R5.5).
+            prefill_token_ids = new_req.prefill_token_ids or prompt_token_ids
             req_idx = self.req_states.add_request(
                 req_id=new_req.req_id,
                 prompt_len=len(prompt_token_ids),
-                all_token_ids=list(prompt_token_ids),
+                all_token_ids=list(prefill_token_ids),
                 num_computed_tokens=new_req.num_computed_tokens,
                 max_tokens=max_tokens,
             )
@@ -201,10 +206,14 @@ class SimModelRunner:
         """Drop state for requests the scheduler says are done. R5.8."""
         assert self.block_tables is not None
         for req_id in scheduler_output.finished_req_ids:
+            # R15/R18. Per-request simulator state, dropped with the request. These
+            # are keyed by request id and would otherwise grow for the life of the
+            # process -- and hand a reused id the previous request's answer.
+            self.sim_model.forget_request(req_id)
+            self.req_states.mm_features.pop(req_id, None)
             req_idx = self.req_states.remove_request(req_id)
             if req_idx is not None:
                 self.block_tables.clear(req_idx)
-            self.sim_model.forget_request(req_id)
 
     def free_states(self, scheduler_output: SchedulerOutput) -> None:
         """Drop state for preempted requests.

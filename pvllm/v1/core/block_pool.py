@@ -255,8 +255,13 @@ class BlockPool:
         return self.free_block_queue.num_free_blocks
 
     def get_usage(self) -> float:
-        """Fraction of the pool in use. Feeds `vllm:kv_cache_usage_perc` (R12.1)."""
-        return 1.0 - (self.get_num_free_blocks() / self.num_gpu_blocks)
+        """Fraction of the pool in use. Feeds `vllm:kv_cache_usage_perc` (R12.1).
+
+        Over the blocks that can actually be handed out. The reserved null block is
+        pinned by construction and is never anybody's KV, so counting it made an
+        idle windowed engine report non-zero usage forever.
+        """
+        return 1.0 - (self.get_num_free_blocks() / self.num_usable_blocks)
 
     def reset_prefix_cache(self) -> bool:
         """Drop every cached block. R6.10.
@@ -264,7 +269,10 @@ class BlockPool:
         Refuses while any block is still referenced: clearing the cache under a
         running request would let its blocks be handed to someone else.
         """
-        num_used = self.num_gpu_blocks - self.get_num_free_blocks()
+        # Against the *usable* count: the null block is pinned by construction and
+        # is never anybody's KV, so counting it made a windowed engine refuse to
+        # reset its prefix cache even when completely idle.
+        num_used = self.num_usable_blocks - self.get_num_free_blocks()
         if num_used > 0:
             logger.warning(
                 "Failed to reset prefix cache: %d blocks are still in use.", num_used
@@ -300,7 +308,8 @@ class BlockPool:
         )
 
         allocated = sum(1 for block in self.blocks if block.ref_cnt > 0)
-        # total == free + allocated
+        # total == free + allocated, with the null block counted among the allocated
+        # (it is pinned above zero, so it is never in the free queue).
         assert num_free + allocated == self.num_gpu_blocks, (
             f"{num_free} free + {allocated} allocated != {self.num_gpu_blocks} total"
         )

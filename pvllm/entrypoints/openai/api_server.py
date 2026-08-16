@@ -29,7 +29,10 @@ from pvllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequ
 from pvllm.entrypoints.openai.chat_completion.serving import OpenAIServingChat
 from pvllm.entrypoints.openai.completion.protocol import CompletionRequest
 from pvllm.entrypoints.openai.completion.serving import OpenAIServingCompletion
-from pvllm.entrypoints.openai.models.serving import OpenAIServingModels
+from pvllm.entrypoints.openai.models.serving import (
+    OpenAIServingModels,
+    build_lora_modules,
+)
 from pvllm.entrypoints.serve.tokenize.serving import (
     DetokenizeRequest,
     OpenAIServingTokenization,
@@ -62,9 +65,20 @@ class ServerState:
         created = int(self.engine.engine_core.clock_time)
         self.completion = OpenAIServingCompletion(self.engine, self.served_model_names)
         self.chat = OpenAIServingChat(self.engine, self.served_model_names)
-        self.models = OpenAIServingModels(
-            self.served_model_names, model_config.max_model_len, created
+        # R16.1. `--lora-modules name=path`, resolved once. Each adapter gets a
+        # stable integer id: the id partitions the prefix cache, so it must not
+        # change between requests naming the same adapter.
+        lora_modules = build_lora_modules(
+            vllm_config.lora_config, getattr(vllm_config, "lora_modules", None)
         )
+        self.models = OpenAIServingModels(
+            self.served_model_names,
+            model_config.max_model_len,
+            created,
+            lora_modules=lora_modules,
+        )
+        self.completion.models = self.models
+        self.chat.models = self.models
         self.tokenization = OpenAIServingTokenization(
             self.engine.tokenizer, model_config.max_model_len
         )

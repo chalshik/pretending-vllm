@@ -113,7 +113,10 @@ class SimStructuredOutputBackend(StructuredOutputBackend):
     """Validates constraints. The compile step, and only the compile step."""
 
     def compile_grammar(
-        self, request_type: StructuredOutputOptions, grammar_spec: str
+        self,
+        request_type: StructuredOutputOptions,
+        grammar_spec: str,
+        request_id: str | None = None,
     ) -> StructuredOutputGrammar:
         """Prove the constraint is satisfiable, then return a fresh tracker.
 
@@ -124,9 +127,21 @@ class SimStructuredOutputBackend(StructuredOutputBackend):
         thread, where it belongs to one request instead of aborting the step that
         happened to notice.
         """
-        generate_for_constraint(
-            request_type.name.lower(), grammar_spec, np.random.default_rng(0)
+        # With the *request's own* generator, not an arbitrary seed. The two used
+        # to differ, so a schema whose conformance depends on the draw -- a
+        # `pattern` beside a `minLength`, say -- could compile on seed 0 and then
+        # fail validation at generation, inside `execute_model`, taking the engine
+        # down instead of the request. Same generator, same string: a compile that
+        # passes cannot be followed by a generation that fails.
+        from pvllm.sim.rng import RngFactory
+
+        seed = self.vllm_config.sim_config.seed
+        rng = (
+            RngFactory(seed).for_constraint(request_id)
+            if request_id is not None
+            else np.random.default_rng(seed)
         )
+        generate_for_constraint(request_type.name.lower(), grammar_spec, rng)
         return SimGrammar(kind=request_type, spec=grammar_spec)
 
     def allocate_token_bitmask(self, max_num_seqs: int) -> Any:

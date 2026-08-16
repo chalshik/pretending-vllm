@@ -211,6 +211,7 @@ class EngineArgs:
             ),
             structured_outputs_config=StructuredOutputsConfig(),
             lora_config=lora_config,
+            lora_modules=self.lora_modules,
             speculative_config=self.speculative_config,
             kv_transfer_config=kv_transfer,
         )

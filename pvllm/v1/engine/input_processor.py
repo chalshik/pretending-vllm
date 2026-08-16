@@ -65,6 +65,16 @@ class InputProcessor:
         # Bind the tokenizer's EOS, honouring ignore_eos by leaving it unset.
         sampling_params.update_from_tokenizer(self.tokenizer.eos_token_id)
 
+        if lora_request is not None and self.vllm_config.lora_config is None:
+            # R16.1. Accepting it would give the adapter a prefix-cache partition and
+            # no memory cost, and leave `max_loras` unenforced -- a capacity answer
+            # for a deployment that could not serve the request at all.
+            raise ValueError(
+                "a lora_request was given but LoRA is not enabled; start the engine "
+                "with enable_lora=True (adapters cost KV pool memory and max_loras "
+                "bounds how many are resident, so neither is inferred)"
+            )
+
         return EngineCoreRequest(
             request_id=request_id,
             prompt_token_ids=prompt_token_ids,

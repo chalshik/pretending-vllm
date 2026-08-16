@@ -98,8 +98,15 @@ def test_a_window_raises_concurrency_in_proportion():
     wide = concurrency(4096)
     narrow = concurrency(1024)
 
-    assert wide == pytest.approx(full * 8, rel=0.01)
-    assert narrow == pytest.approx(full * 32, rel=0.01)
+    # Not exactly 8x and 32x, and this test used to assert that it was. Concurrency
+    # is bounded by the blocks a request *holds*, which is one more than the window
+    # divides into -- the live window straddles a block boundary and eviction runs
+    # after allocation, so the outgoing block is still held. The old assertion
+    # encoded the overstated figure, which is how it survived.
+    assert wide > full * 7
+    assert narrow > full * 30
+    assert wide < full * 8
+    assert narrow < full * 32
 
 
 def test_a_window_larger_than_the_context_changes_nothing():

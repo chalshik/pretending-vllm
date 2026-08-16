@@ -254,6 +254,16 @@ class MPClient(EngineCoreClient):
     def abort_requests(self, request_ids: list[str]) -> None:
         if request_ids:
             self._send(EngineCoreRequestType.ABORT, request_ids)
+            # An aborted request produces no output, so nothing would ever decrement
+            # it -- and `has_requests` would stay true forever, leaving the async
+            # output handler spinning on an engine with nothing to do. That is the
+            # streaming-client-disconnects path, which is exactly the case the
+            # multiprocess mode is most likely to be running.
+            self._note_aborted(len(request_ids))
+
+    def _note_aborted(self, count: int) -> None:
+        """Overridden by the async client, which tracks outstanding work."""
+        return None
 
     @property
     def clock_time(self) -> float:
@@ -373,6 +383,10 @@ class AsyncMPClient(MPClient):
     def _note_submitted(self) -> None:
         with self._lock:
             self._outstanding += 1
+
+    def _note_aborted(self, count: int) -> None:
+        with self._lock:
+            self._outstanding = max(0, self._outstanding - count)
 
     def _read_frames(self) -> None:
         while not self._closed:

@@ -81,9 +81,18 @@ class StructuredOutputBackend(ABC):
 
     @abstractmethod
     def compile_grammar(
-        self, request_type: StructuredOutputOptions, grammar_spec: str
+        self,
+        request_type: StructuredOutputOptions,
+        grammar_spec: str,
+        request_id: str | None = None,
     ) -> StructuredOutputGrammar:
-        """Compile one constraint. Raises if the spec is unsupported or malformed."""
+        """Compile one constraint. Raises if the spec is unsupported or malformed.
+
+        `request_id` is a pvllm addition. Upstream's backends are deterministic
+        given the spec, so they need no per-request key; the simulated one generates
+        the output the request will emit, and must prove *that* string conforms
+        rather than some other request's.
+        """
 
     @abstractmethod
     def allocate_token_bitmask(self, max_num_seqs: int) -> Any:
