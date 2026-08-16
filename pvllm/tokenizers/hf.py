@@ -282,15 +282,40 @@ class HFTokenizer:
                 f"token counts are not your model's."
             )
         try:
-            from jinja2 import Environment
+            import jinja2.ext
+            from jinja2.sandbox import ImmutableSandboxedEnvironment
         except ImportError as exc:
             raise ImportError(
                 "rendering a model's chat template needs jinja2. Install the extra:\n"
                 "    pip install 'pretending-vllm[realtok]'"
             ) from exc
 
-        environment = Environment(trim_blocks=True, lstrip_blocks=True)
+        # The environment `transformers._compile_jinja_template` builds, feature for
+        # feature, because a template renders differently under a different one and
+        # the whole point of slow mode is that the prompt string matches. A bare
+        # `Environment` was missing three things and each broke real models:
+        #
+        #   * `loopcontrols`, without which any template using `{% break %}` dies at
+        #     load with TemplateSyntaxError;
+        #   * `strftime_now`, which every Llama-3.x default template calls in its
+        #     opening lines -- undefined, that is an HTTP 500 on a request that will
+        #     never succeed, exactly what `error_response.py` says not to do;
+        #   * a `tojson` that does *not* escape. jinja2's builtin is
+        #     `htmlsafe_json_dumps` with `sort_keys=True`, so it reorders keys and
+        #     escapes `<`, `>`, `&` and every non-ASCII character into `\uXXXX` -- a
+        #     silently different prompt, which is the failure mode slow mode exists
+        #     to remove rather than introduce.
+        #
+        # Sandboxed, as transformers sandboxes it: a chat template is data that
+        # arrives with a downloaded model, and it should not reach the interpreter.
+        environment = ImmutableSandboxedEnvironment(
+            trim_blocks=True,
+            lstrip_blocks=True,
+            extensions=[jinja2.ext.loopcontrols],
+        )
+        environment.filters["tojson"] = _tojson
         environment.globals["raise_exception"] = _raise_template_error
+        environment.globals["strftime_now"] = _strftime_now
         template = environment.from_string(self._chat_template)
         return template.render(
             messages=messages,
@@ -313,6 +338,32 @@ class HFTokenizer:
 def _raise_template_error(message: str) -> None:
     """`raise_exception` is what chat templates call to refuse a message list."""
     raise ValueError(message)
+
+
+def _strftime_now(fmt: str) -> str:
+    """Today's date, which Llama-3.x templates put in their system prompt.
+
+    The one wall clock this package touches, and it is unavoidable: the template
+    asks for the current date and a fixed answer would put a stale date in every
+    prompt. It is read at *render* time in the frontend, never by the engine, so it
+    cannot reach the simulated timebase (R19.1).
+    """
+    import datetime
+
+    return datetime.datetime.now().strftime(fmt)
+
+
+def _tojson(value: Any, **kwargs: Any) -> str:
+    """transformers' `tojson`, which is not jinja2's.
+
+    jinja2's builtin escapes for HTML and sorts keys; a chat template uses this to
+    embed tool schemas, and either behaviour changes the prompt string.
+    """
+    import json as _json
+
+    kwargs.setdefault("ensure_ascii", False)
+    kwargs.setdefault("sort_keys", False)
+    return _json.dumps(value, **kwargs)
 
 
 __all__ = ["HFTokenizer"]

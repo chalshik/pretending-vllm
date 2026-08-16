@@ -37,7 +37,19 @@ SIM_PACKAGE = PACKAGE_ROOT / "sim"
 #: Modules that must not know a simulator exists.
 BOUNDARY_ENFORCED_SUBTREES = ("v1/core", "v1/engine", "entrypoints")
 
-FORBIDDEN_TIME_ATTRS = {"time", "monotonic", "perf_counter", "process_time", "time_ns"}
+#: `now`/`utcnow` are here because `datetime.datetime.now()` is a wall clock and the
+#: attribute check below already scopes itself to the `time` and `datetime` modules --
+#: `time.now` does not exist, so nothing is caught spuriously. They were missing, and a
+#: `strftime_now` added to the chat-template environment walked straight past the lint.
+FORBIDDEN_TIME_ATTRS = {
+    "time",
+    "monotonic",
+    "perf_counter",
+    "process_time",
+    "time_ns",
+    "now",
+    "utcnow",
+}
 FORBIDDEN_MODULES = {"torch", "transformers", "cupy", "triton"}
 RANDOM_MODULES = {"random", "secrets"}
 
@@ -71,13 +83,21 @@ def _imported_module_roots(tree: ast.Module) -> set[str]:
 
 
 def _full_dotted_imports(tree: ast.Module) -> set[str]:
-    """Fully dotted module paths imported, for subtree checks."""
+    """Fully dotted module paths imported, for subtree checks.
+
+    `from a.b import c` records both `a.b` and `a.b.c`, because the name being
+    imported may itself be a module. Recording only `a.b` let the ordinary
+    module-import form -- `from pvllm.entrypoints.cli import openai` -- slip past both
+    exemption guards below while the dotted form was caught, so each enforced its
+    invariant against one of the two ways to write the same import.
+    """
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             names.add(node.module)
+            names.update(f"{node.module}.{alias.name}" for alias in node.names)
     return names
 
 
@@ -87,7 +107,15 @@ def _full_dotted_imports(tree: ast.Module) -> set[str]:
 #: measures this side of the socket -- which is why the output labels itself
 #: `[client-measured]` and points at `/metrics` for the modeled numbers. Nothing in
 #: the engine can read what it produces.
-WALL_CLOCK_CLIENTS = ("pvllm/entrypoints/cli/openai.py",)
+WALL_CLOCK_CLIENTS = (
+    "pvllm/entrypoints/cli/openai.py",
+    # R3.1. A model's chat template may call `strftime_now`, and Llama-3.x's default
+    # one does in its opening lines. The date is read while *rendering a prompt* in
+    # the frontend, before any request exists; it never reaches the engine, and a
+    # fixed answer would stamp a stale date into every prompt. The guard below keeps
+    # this from spreading the same way it does for the CLI client.
+    "pvllm/tokenizers/hf.py",
+)
 
 
 def test_no_wall_clock_outside_sim() -> None:
@@ -235,13 +263,23 @@ def test_the_wall_clock_client_is_not_reachable_from_the_engine() -> None:
     some engine module imports it for a helper -- so the exemption is one module wide
     and this is what keeps it there. Only the CLI entry point may reach it.
     """
-    allowed = {"pvllm/entrypoints/cli/main.py", "pvllm/entrypoints/cli/openai.py"}
+    allowed = {
+        "pvllm/entrypoints/cli/main.py",
+        "pvllm/entrypoints/cli/openai.py",
+        # The tokenizer registry is the only door to the chat-template renderer, and
+        # `get_tokenizer` hands back a `TokenizerLike` -- so the engine reaches the
+        # wall clock only through a protocol method that renders text.
+        "pvllm/tokenizers/registry.py",
+        "pvllm/tokenizers/hf.py",
+    }
     violations: list[str] = []
     for path in _python_files():
         if _relative(path) in allowed:
             continue
         for imported in _full_dotted_imports(_parse(path)):
-            if imported.startswith("pvllm.entrypoints.cli.openai"):
+            if imported.startswith(
+                ("pvllm.entrypoints.cli.openai", "pvllm.tokenizers.hf")
+            ):
                 violations.append(f"{_relative(path)}: imports `{imported}`")
     assert not violations, (
         "the wall-clock CLI client is only for the CLI entry point:\n"

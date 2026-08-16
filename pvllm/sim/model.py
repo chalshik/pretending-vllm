@@ -195,7 +195,19 @@ class SimModel:
             self._planned_lengths[request_id] = length
             return length
 
-        rng = self.rng_factory.for_request(request_id)
+        # R19.2. Seeded from the request's own seed when it carries one, so a client
+        # asking for reproducibility gets it under *every* length policy. Keyed on the
+        # request id alone, the draw made two same-seeded requests stop at different
+        # lengths -- the token streams agreed (those are seeded per position) and the
+        # stop points did not, so the completions differed and the README's
+        # unconditional "the same seed and parameters reproduce the same completion"
+        # was true only under the default policy, which never takes this draw.
+        seed = self._request_seeds.get(request_id)
+        rng = (
+            self.rng_factory.for_request(request_id)
+            if seed is None
+            else self.rng_factory.for_seeded_length(seed)
+        )
         policy = self.output_length_policy
 
         if policy == "from_request":

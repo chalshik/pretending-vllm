@@ -46,6 +46,10 @@ class TraceSummary:
     #: request_id -> step index -> glyph.
     rows: dict[str, dict[int, str]] = field(default_factory=dict)
     num_steps: int = 0
+    #: R13.4. Steps this replica spent keeping an expert-parallel collective whole
+    #: rather than serving anyone. Device time that produced nothing, and invisible in
+    #: a request timeline by construction -- an idle replica has no rows at all.
+    num_dummy_steps: int = 0
     total_tokens: int = 0
     finish_reasons: dict[str, str] = field(default_factory=dict)
     prompt_tokens: dict[str, int] = field(default_factory=dict)
@@ -84,6 +88,8 @@ def summarize(path: str | os.PathLike[str]) -> TraceSummary:
         elif kind == "step":
             step = int(record.get("step", summary.num_steps + 1))
             summary.num_steps = max(summary.num_steps, step)
+            if record.get("dummy"):
+                summary.num_dummy_steps += 1
             summary.kv_usage.append(float(record.get("kv_usage", 0.0)))
             summary.scheduled_tokens.append(
                 int(record.get("total_num_scheduled_tokens", 0))
@@ -157,7 +163,15 @@ def render_text(summary: TraceSummary, width: int = 100) -> str:
     lines.append("")
 
     if not summary.rows:
-        lines.append("  (no requests)")
+        # An expert-parallel replica with no work of its own still spends device
+        # time, and a timeline of requests cannot show it -- so it is said instead.
+        if summary.num_dummy_steps:
+            lines.append(
+                f"  (no requests -- {summary.num_dummy_steps} dummy steps keeping an "
+                f"expert-parallel collective whole)"
+            )
+        else:
+            lines.append("  (no requests)")
         return "\n".join(lines)
 
     # Steps are columns; a long run is compressed so the picture still fits a

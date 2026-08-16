@@ -100,12 +100,37 @@ class EngineIntrospector:
         assert isinstance(client, InprocClient | DPInprocClient)
         return client.engine_core
 
+    def _replica_marker(self) -> dict[str, Any]:
+        """Which replica the numbers below describe, in the payload.
+
+        R13.3. A comment saying "replica 0, said rather than implied" said it only to
+        whoever read the source. On a data-parallel deployment every `/debug/*`
+        response describes one replica out of N, and a request routed elsewhere is
+        simply absent -- so an operator chasing a stuck request got "not found" for a
+        request the deployment was actively running, with nothing in the response to
+        suggest looking further. Now the response says so.
+        """
+        from pvllm.v1.engine.dp_client import DPInprocClient
+
+        client = self.engine.engine_core
+        if not isinstance(client, DPInprocClient):
+            return {}
+        return {
+            "data_parallel_rank": 0,
+            "data_parallel_size": client.data_parallel_size,
+            "scope": (
+                f"replica 0 of {client.data_parallel_size}. Requests routed to the "
+                f"other replicas are not visible here; /metrics is the aggregate."
+            ),
+        }
+
     # --- scheduler -----------------------------------------------------------
 
     def scheduler_state(self) -> dict[str, Any]:
         """What the scheduler is doing right now."""
         scheduler = self._core.scheduler
         return {
+            **self._replica_marker(),
             "step": scheduler.step_index,
             "time": self._core.clock.time(),
             "elapsed": self._core.clock.elapsed,

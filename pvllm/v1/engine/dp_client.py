@@ -116,8 +116,9 @@ class DPInprocClient(EngineCoreClient):
         parallel = vllm_config.parallel_config
         self.lockstep = parallel.enable_expert_parallel and self.data_parallel_size > 1
         #: Rounds in which at least one replica had work, so the others paid a dummy
-        #: step. Counted for the stats; see `_lockstep_round` for what is deliberately
-        #: *not* counted.
+        #: step. Reported as `lockstep_rounds`, and worth reporting beside
+        #: `num_dummy_steps` because the ratio is the imbalance: R rounds against
+        #: D dummy steps says D/R replica-steps went to nothing on an average round.
         self.lockstep_rounds = 0
 
         #: Where the scan starts. Upstream rotates this per request to break ties;
@@ -387,6 +388,7 @@ class DPInprocClient(EngineCoreClient):
         stats["dummy_step_seconds"] = sum(
             engine.dummy_step_seconds for engine in self.engine_cores
         )
+        stats["lockstep_rounds"] = self.lockstep_rounds
         stats["per_engine_dummy_steps"] = [
             engine.num_dummy_steps for engine in self.engine_cores
         ]

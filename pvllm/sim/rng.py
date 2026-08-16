@@ -133,6 +133,16 @@ class RngFactory:
         entropy = _derive_entropy(self._seed, "constraint", request_id)
         return np.random.default_rng(np.random.SeedSequence(entropy))
 
+    def for_seeded_length(self, seed: int) -> np.random.Generator:
+        """The output-length draw for a request that carries its own seed. R19.2.
+
+        Derived from the seed and nothing else -- deliberately not from the request
+        id, so two requests with the same seed plan the same length. That is what
+        makes "the same seed reproduces the same completion" true under a policy that
+        actually draws a length, rather than only under the default that does not.
+        """
+        return np.random.default_rng(_derive_entropy(seed, "seeded-length", ""))
+
     def stream(self, name: str) -> np.random.Generator:
         """An engine-level stream that is not scoped to a request.
 

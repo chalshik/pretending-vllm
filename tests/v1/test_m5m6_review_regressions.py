@@ -307,3 +307,178 @@ async def test_a_cancelled_fan_out_leaves_no_parent_behind():
         assert engine.output_processor.request_states == {}
     finally:
         engine.shutdown()
+
+
+# --- the six the review's top-2 cap left unverified ---------------------------
+
+
+def test_the_purity_guards_catch_both_import_forms():
+    """`from a.b import c` records only `a.b`, so the ordinary module-import form --
+    `from pvllm.entrypoints.cli import openai` -- slipped past both exemption guards
+    while the dotted form was caught. Each enforced its invariant against one of the
+    two ways to write the same import."""
+    import ast
+
+    from tests.unit.test_purity import _full_dotted_imports
+
+    tree = ast.parse("from pvllm.entrypoints.cli import openai\n")
+    assert "pvllm.entrypoints.cli.openai" in _full_dotted_imports(tree)
+    tree = ast.parse("from pvllm.entrypoints.cli.openai import stream_events\n")
+    assert "pvllm.entrypoints.cli.openai" in _full_dotted_imports(tree)
+
+
+def test_a_wall_clock_read_through_datetime_is_caught():
+    """`datetime.datetime.now()` is a wall clock and `now` was not in the forbidden
+    set, so a `strftime_now` added to the chat-template environment walked straight
+    past the lint that exists to catch exactly that."""
+    from tests.unit.test_purity import FORBIDDEN_TIME_ATTRS
+
+    assert "now" in FORBIDDEN_TIME_ATTRS
+    assert "utcnow" in FORBIDDEN_TIME_ATTRS
+
+
+def test_lockstep_rounds_is_reported():
+    """The fourth inert mechanism: incremented twice, read nowhere, under a comment
+    saying it was counted for the stats -- shipped in the commit that named the
+    pattern and deleted the third."""
+    llm = LLM(
+        model="moe-8x7b",
+        device_card="datacenter-80gb",
+        max_model_len=2048,
+        block_size=16,
+        max_num_batched_tokens=512,
+        max_num_seqs=4,
+        tensor_parallel_size=1,
+        data_parallel_size=2,
+        enable_expert_parallel=True,
+        disable_log_stats=True,
+    )
+    try:
+        llm.generate(["a prompt"], SamplingParams(max_tokens=8))
+        stats = llm.llm_engine.make_stats()
+        assert stats["lockstep_rounds"] == 8
+        # The ratio is the imbalance: one replica-step wasted per round here.
+        assert stats["num_dummy_steps"] == stats["lockstep_rounds"]
+    finally:
+        llm.shutdown()
+
+
+def test_a_dummy_step_lands_on_the_scheduler_s_step_axis(tmp_path):
+    """Dummy records carried `EngineCore.step_index`, a different counter that never
+    moves for a dummy batch -- so an idle replica wrote every record at step 0 and the
+    viewer, which uses that field as its column index, rendered none of them."""
+    import json
+
+    from pvllm.trace_viewer import render_text, summarize
+
+    llm = LLM(
+        model="moe-8x7b",
+        device_card="datacenter-80gb",
+        max_model_len=2048,
+        block_size=16,
+        max_num_batched_tokens=512,
+        max_num_seqs=4,
+        tensor_parallel_size=1,
+        data_parallel_size=2,
+        enable_expert_parallel=True,
+        disable_log_stats=True,
+        trace_path=str(tmp_path / "t.jsonl"),
+    )
+    try:
+        llm.generate(["a prompt"], SamplingParams(max_tokens=8))
+    finally:
+        llm.shutdown()
+
+    idle = tmp_path / "t.dp1.jsonl"
+    steps = [
+        json.loads(line)
+        for line in idle.read_text().splitlines()
+        if json.loads(line).get("dummy")
+    ]
+    assert [record["step"] for record in steps] == list(range(1, 9))
+    # And the viewer says what the replica spent, which a request timeline cannot.
+    assert "8 dummy steps" in render_text(summarize(str(idle)))
+
+
+def test_the_debug_surface_says_which_replica_it_describes():
+    """A comment saying "replica 0, said rather than implied" said it only to whoever
+    read the source. An operator chasing a request routed elsewhere got "not found"
+    for a request the deployment was actively running."""
+    import asyncio
+
+    from prometheus_client import CollectorRegistry
+
+    async def probe() -> dict:
+        app = build_app(
+            AsyncEngineArgs(
+                model="tiny-test",
+                served_model_name="m",
+                max_model_len=512,
+                device_card="tiny-2gb",
+                data_parallel_size=2,
+                disable_log_stats=True,
+            ).create_engine_config(),
+            registry=CollectorRegistry(),
+            enable_debug_endpoints=True,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return (await client.get("/debug/scheduler")).json()
+
+    body = asyncio.run(probe())
+    assert body["data_parallel_rank"] == 0
+    assert body["data_parallel_size"] == 2
+    assert "replica 0 of 2" in body["scope"]
+
+
+def test_a_seed_reproduces_the_completion_under_every_length_policy():
+    """The seed threaded into the per-position draw but not the length draw, which
+    stayed keyed on request id -- so two same-seeded requests agreed on their token
+    stream and disagreed on where to stop. The test written at the time ran only
+    under the default policy, which never takes that draw."""
+    for policy in ("from_request", "uniform", "lognormal"):
+        llm = LLM(
+            model="tiny-test",
+            device_card="tiny-2gb",
+            max_model_len=512,
+            output_length_policy=policy,
+            disable_log_stats=True,
+        )
+        try:
+            outputs = llm.generate(["x", "x"], SamplingParams(max_tokens=300, seed=1))
+            first, second = outputs[0].outputs[0], outputs[1].outputs[0]
+            assert first.text == second.text, policy
+            assert len(first.token_ids) == len(second.token_ids), policy
+        finally:
+            llm.shutdown()
+
+
+def test_a_real_chat_template_gets_the_environment_transformers_builds(tmp_path):
+    """A bare jinja2 Environment is missing three things and each broke real models:
+    `strftime_now` (every Llama-3.x template calls it -- an HTTP 500 on a request that
+    can never succeed), `loopcontrols` (`{% break %}` dies at load), and a `tojson`
+    that does not reorder keys or escape into `\\uXXXX`."""
+    pytest.importorskip("jinja2")
+    from pvllm.tokenizers.hf import HFTokenizer
+
+    class Stub:
+        def token_to_id(self, token):
+            return 1
+
+        def get_vocab_size(self):
+            return 100
+
+        def get_added_tokens_decoder(self):
+            return {}
+
+    def render(template: str) -> str:
+        tokenizer = HFTokenizer(
+            Stub(), name="probe", config={"chat_template": template}
+        )
+        return tokenizer.apply_chat_template([{"role": "user", "content": "hi"}])
+
+    assert render("{{ strftime_now('%Y') }}").isdigit()
+    assert render("{% for m in messages %}{% break %}{% endfor %}ok") == "ok"
+    # Key order preserved, `<` not escaped -- jinja2's builtin would do both.
+    assert render("{{ {'b': 1, 'a': 'x<y'} | tojson }}") == '{"b": 1, "a": "x<y"}'

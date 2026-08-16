@@ -400,10 +400,16 @@ class EngineCore:
         """Count a dummy step and trace it. Shared by both step paths."""
         self.num_dummy_steps += 1
         self.dummy_step_seconds += seconds
+        # The *scheduler's* counter, which is what every other step record carries
+        # and what `pvllm trace view` uses as its column index. `EngineCore.step_index`
+        # is a different counter and never moves for a dummy batch, so an idle replica
+        # wrote every record at step 0 and the viewer rendered none of them. Advanced
+        # here because a dummy step really is a step on this replica's timeline.
+        self.scheduler.step_index += 1
         self.trace.emit(
             "step",
             t=self.clock.time(),
-            step=self.step_index,
+            step=self.scheduler.step_index,
             dummy=True,
             num_scheduled_tokens=0,
         )
