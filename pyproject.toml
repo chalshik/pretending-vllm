@@ -40,7 +40,7 @@ dependencies = [
 [project.optional-dependencies]
 # A real Hugging Face tokenizer. Mandatory for conformance class C3, since prefix
 # cache hit rates on real text depend on exact tokenization (D3).
-realtok = ["tokenizers>=0.19"]
+realtok = ["tokenizers>=0.19", "huggingface-hub>=0.23", "jinja2>=3.1"]
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",

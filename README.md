@@ -284,6 +284,25 @@ uv venv && uv pip install -e ".[dev]"
 pytest
 ```
 
+### Token counts that match your model
+
+By default the tokenizer is a byte-level mock: `"hello world"` is eleven tokens where your model
+makes two or three. That is fine for exercising plumbing and wrong for the three numbers a product
+reads off the engine — `usage.prompt_tokens`, the prompt length at which the context-length error
+fires, and where the prefix cache's block boundaries fall.
+
+```bash
+pip install 'pretending-vllm[realtok]'
+pvllm serve --model dense-0.6b --tokenizer Qwen/Qwen2.5-0.5B-Instruct --tokenizer-mode slow
+```
+
+That loads the tokenizer your model actually ships — a local `tokenizer.json`, a local directory, or
+a Hub id — and renders its own chat template, so every token count downstream becomes the one real
+vLLM would report. A Hub id fetches over the network on first use, which is why it is opt-in.
+
+The generated *text* is still synthetic either way: ids are drawn, not inferred, so a real tokenizer
+makes the output look like language without making it mean anything.
+
 `tools/spec_sync.py` checks that every module's declared upstream counterpart still exists at the
 pin. `tests/unit/test_purity.py` enforces the simulation boundary: no clock, no randomness, and no
 `torch`/`transformers` import outside `pvllm/sim/`.

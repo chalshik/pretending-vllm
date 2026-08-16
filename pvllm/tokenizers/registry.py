@@ -49,11 +49,9 @@ def get_tokenizer(
                 "This is required for conformance class C3, since prefix cache hit "
                 "rates on real text depend on exact tokenization."
             ) from exc
-        raise NotImplementedError(
-            "the real Hugging Face tokenizer path lands with the chat template work "
-            "with the `realtok` extra (requirement R3.1); only MockTokenizer is "
-            "wired up so far"
-        )
+        from pvllm.tokenizers.hf import HFTokenizer
+
+        return HFTokenizer.load(tokenizer_name, model_vocab_size=vocab_size)
 
     raise ValueError(
         f"unknown tokenizer_mode {tokenizer_mode!r}; expected 'auto', 'mock', or 'slow'"
