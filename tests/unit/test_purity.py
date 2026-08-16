@@ -81,11 +81,22 @@ def _full_dotted_imports(tree: ast.Module) -> set[str]:
     return names
 
 
+#: The one module outside `pvllm/sim/` allowed a wall clock, and the reason it is not
+#: a hole in R19.1: `pvllm complete` / `pvllm chat` are *clients*. They run in a
+#: different process from the engine, hold no engine state, and their `--stats` timing
+#: measures this side of the socket -- which is why the output labels itself
+#: `[client-measured]` and points at `/metrics` for the modeled numbers. Nothing in
+#: the engine can read what it produces.
+WALL_CLOCK_CLIENTS = ("pvllm/entrypoints/cli/openai.py",)
+
+
 def test_no_wall_clock_outside_sim() -> None:
     """R19.1: the engine core owns the clock; nothing else reads one."""
     violations: list[str] = []
     for path in _python_files():
         if _is_sim(path):
+            continue
+        if _relative(path) in WALL_CLOCK_CLIENTS:
             continue
         tree = _parse(path)
 
@@ -213,6 +224,28 @@ def test_no_simulator_branching_above_boundary() -> None:
     assert not violations, (
         "Code above the simulation boundary branched on being simulated (B1).\n  "
         + "\n  ".join(violations)
+    )
+
+
+def test_the_wall_clock_client_is_not_reachable_from_the_engine() -> None:
+    """The exemption above is sound only while nothing in the engine can reach it.
+
+    `pvllm complete` measures a wall clock, which R19.1 forbids everywhere the engine
+    can see. That is fine for a client in another process and not fine the moment
+    some engine module imports it for a helper -- so the exemption is one module wide
+    and this is what keeps it there. Only the CLI entry point may reach it.
+    """
+    allowed = {"pvllm/entrypoints/cli/main.py", "pvllm/entrypoints/cli/openai.py"}
+    violations: list[str] = []
+    for path in _python_files():
+        if _relative(path) in allowed:
+            continue
+        for imported in _full_dotted_imports(_parse(path)):
+            if imported.startswith("pvllm.entrypoints.cli.openai"):
+                violations.append(f"{_relative(path)}: imports `{imported}`")
+    assert not violations, (
+        "the wall-clock CLI client is only for the CLI entry point:\n"
+        + "\n".join(violations)
     )
 
 

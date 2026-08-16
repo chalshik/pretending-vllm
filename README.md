@@ -87,6 +87,17 @@ pretending-vllm trace  (upstream 0.27.1, seed 0, clock virtual)
   legend: # prefill  : small prefill  = decode  . waiting  ! preempted  ^ resumed
 ```
 
+**A client**, for poking a running server without writing one:
+
+```bash
+pvllm complete -q "hello there"          # or pvllm chat --system-prompt "Be terse."
+```
+
+Both talk to a server over the OpenAI API, exactly as `vllm complete` does, and use only the
+standard library so they work on a bare install. `--stats` prints TTFT and tokens/sec measured by
+the *client* — under the default virtual clock that times this simulator, not the deployment; the
+modeled numbers are on `/metrics`.
+
 **Live HTTP introspection**, for asking questions while a product is driving the engine:
 
 ```bash

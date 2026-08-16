@@ -3,8 +3,8 @@
 Upstream: vllm/entrypoints/cli/main.py
 Tier: B
 
-R2.6. `serve`, `trace`, and `bench` work; `complete` is not implemented and says so
-rather than existing as an empty command.
+R2.6. `serve`, `trace`, `bench`, `complete` and `chat` all work. `complete` and `chat`
+are clients for a running server, as upstream's are -- they start no engine.
 """
 
 from __future__ import annotations
@@ -62,10 +62,24 @@ def build_parser() -> argparse.ArgumentParser:
             "bench", help="benchmark latency, throughput, serving, or a sweep"
         ).add_argument("rest", nargs=argparse.REMAINDER)
 
-    deferred = subparsers.add_parser(
-        "complete", help="not yet implemented (R2.6, interactive completion)"
-    )
-    deferred.add_argument("rest", nargs=argparse.REMAINDER)
+    # R2.6. Clients for a running server, as upstream's are: `pvllm serve` in one
+    # terminal, `pvllm complete` in another. Built eagerly -- unlike `bench`, these
+    # import nothing heavier than the standard library.
+    from pvllm.entrypoints.cli.openai import add_query_args
+
+    for name, help_text in (
+        ("complete", "text completions against a running server"),
+        ("chat", "chat completions against a running server"),
+    ):
+        client = add_query_args(subparsers.add_parser(name, help=help_text))
+        client.add_argument("--max-tokens", type=int, default=128)
+        client.add_argument("--temperature", type=float, default=1.0)
+        if name == "chat":
+            client.add_argument(
+                "--system-prompt",
+                default=None,
+                help="prepended to the conversation as a system message",
+            )
 
     return parser
 
@@ -106,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(rendered)
         return 0
+
+    if args.command in ("complete", "chat"):
+        from pvllm.entrypoints.cli.openai import run_chat, run_complete
+
+        return run_chat(args) if args.command == "chat" else run_complete(args)
 
     print(
         f"`pvllm {args.command}` is not implemented yet (requirement R2.6).",
