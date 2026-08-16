@@ -66,6 +66,9 @@ class SimModel:
     #: request_id -> how many tokens it will emit before stopping. Decided once, on
     #: first use, so the answer cannot drift mid-generation.
     _planned_lengths: dict[str, int] = field(default_factory=dict)
+    #: R11.2. Per-request `SamplingParams.seed`, when the client set one. Empty for
+    #: the overwhelming majority of requests, which derive from the engine seed.
+    _request_seeds: dict[str, int] = field(default_factory=dict)
 
     #: R15. request_id -> the exact token sequence a constrained request must emit.
     #: See pvllm/sim/grammar.py for why the constraint is satisfied by generating
@@ -249,7 +252,9 @@ class SimModel:
         # Keyed by position, not drawn from the request's stream: sampling has to be
         # idempotent, or speculation would not be lossless and a recomputed request
         # would produce different tokens. See `RngFactory.for_position`.
-        rng = self.rng_factory.for_position(request_id, position)
+        rng = self.rng_factory.for_position(
+            request_id, position, seed=self._request_seeds.get(request_id)
+        )
         if self.content_policy == "pseudoword":
             return int(
                 rng.integers(
@@ -340,6 +345,17 @@ class SimModel:
         norm = math.sqrt(sum(value * value for value in vector)) or 1.0
         return [value / norm for value in vector]
 
+    def set_request_seed(self, request_id: str, seed: int | None) -> None:
+        """Bind a request's own `SamplingParams.seed`. R11.2, R19.2.
+
+        Absent, the request's tokens derive from the engine seed and its id, so two
+        requests differ and a rerun repeats. With one, the *seed* replaces the engine
+        seed in that derivation, so two requests carrying the same seed produce the
+        same completion -- which is what a client setting `seed` is asking for.
+        """
+        if seed is not None:
+            self._request_seeds[request_id] = seed
+
     def forget_request(self, request_id: str) -> None:
         """Drop a finished request's cached state. R15, R11.2.
 
@@ -351,4 +367,5 @@ class SimModel:
         """
         self._constrained_plans.pop(request_id, None)
         self._planned_lengths.pop(request_id, None)
+        self._request_seeds.pop(request_id, None)
         self.rng_factory.forget_request(request_id)

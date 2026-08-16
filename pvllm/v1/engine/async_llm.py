@@ -211,14 +211,9 @@ class AsyncLLM:
             # returns a disconnected client's blocks within one step; without it they
             # are held until the request would have finished on its own.
             self._queues.pop(request_id, None)
-            live = [
-                child
-                for child in (children or [request_id])
-                if child in self.output_processor.request_states
-            ]
+            live = self.output_processor.abort_requests(children or [request_id])
             if live:
                 self.engine_core.abort_requests(live)
-                self.output_processor.abort_requests(live)
 
     async def encode(
         self,
@@ -226,6 +221,7 @@ class AsyncLLM:
         pooling_params: PoolingParams,
         request_id: str,
         priority: int = 0,
+        lora_request: Any = None,
     ) -> AsyncGenerator[PoolingRequestOutput, None]:
         """Yield one pooling output and finish. R2.2.
 
@@ -247,6 +243,7 @@ class AsyncLLM:
                 prompt,
                 priority=priority,
                 pooling_params=pooling_params,
+                lora_request=lora_request,
             )
             self.engine_core.add_request(engine_request)
             self.output_processor.add_request(
@@ -274,8 +271,12 @@ class AsyncLLM:
                 self.output_processor.abort_requests([request_id])
 
     async def abort(self, request_id: str) -> None:
-        self.engine_core.abort_requests([request_id])
-        self.output_processor.abort_requests([request_id])
+        # R2.4 + R11.7. The frontend expands the id first: under `n > 1` the client's
+        # id names no engine request, so handing it straight to the core would abort
+        # nothing and leave `n` requests running to completion.
+        to_abort = self.output_processor.abort_requests([request_id])
+        if to_abort:
+            self.engine_core.abort_requests(to_abort)
         queue = self._queues.pop(request_id, None)
         if queue is not None:
             queue.put_nowait(asyncio.CancelledError())

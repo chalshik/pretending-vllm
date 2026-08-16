@@ -38,8 +38,15 @@ class BlockTables:
         max_model_len: int,
         max_num_batched_tokens: int,
         enable_caching: bool = False,
+        windowed_groups: list[bool] | None = None,
     ) -> None:
         self.enable_caching = enable_caching
+        #: R6.7. Which groups slide. A windowed group's row keeps block ids the
+        #: manager has already handed back -- `remove_skipped_blocks` nulls its own
+        #: slot and nothing tells the worker, matching upstream, which never reads
+        #: those positions. Scanning them for ownership is therefore not a valid
+        #: check; see `validate_block_ownership`.
+        self.windowed_groups = windowed_groups or []
         self.block_sizes = block_sizes
         self.num_kv_cache_groups = len(block_sizes)
         self.max_num_reqs = max_num_reqs
@@ -216,8 +223,16 @@ class BlockTables:
         # legitimate sharing from double-allocation, because reference counts live
         # in the pool, not in the block table. The pool's own invariants
         # (BlockPool._check_invariants) cover that case instead.
-        if not self.enable_caching:
+        # R6.7. And not for a group that slides: its row still lists blocks the
+        # manager freed when they fell out of the window, so a block legitimately
+        # re-handed to another request appears in two rows. The check raised
+        # "the block pool allocated it twice" for a bug the block pool did not
+        # commit -- an error that names the wrong component is worse than no check.
+        if not self.enable_caching and not self._group_slides(group_id):
             self.validate_block_ownership(group_id)
+
+    def _group_slides(self, group_id: int) -> bool:
+        return group_id < len(self.windowed_groups) and self.windowed_groups[group_id]
 
     def validate_block_ownership(self, group_id: int = 0) -> None:
         """No physical block may appear in two live requests' tables. R8.3.
@@ -227,7 +242,8 @@ class BlockTables:
         and the resulting corruption would then surface only much later, on the step
         they finally collide.
 
-        **Only sound with prefix caching disabled.** Sharing a cached prefix means
+        **Only sound with prefix caching disabled, and only for a group that does not
+        slide.** Sharing a cached prefix means
         two requests holding the same blocks on purpose. Callers should not invoke
         this when caching is on; `compute_slot_mapping` does not.
         """

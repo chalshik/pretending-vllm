@@ -139,7 +139,16 @@ class RequestState:
                 if self.sampling_params is not None
                 else None
             ),
-            n_param=self.sampling_params.n if self.sampling_params is not None else 1,
+            # R11.7 + C6. The *parent's* n. A child's params always say 1 -- that is
+            # what makes it one engine request -- so reading them reported `n=1` for
+            # every parallel-sampling request and put n observations in the `le=1`
+            # bucket instead of one observation of n. A dashboard alerting on `n > 1`
+            # traffic read flat while the fleet did n times the decode work.
+            n_param=(
+                self.parent_request.n
+                if self.parent_request is not None
+                else (self.sampling_params.n if self.sampling_params is not None else 1)
+            ),
         )
 
 
@@ -150,6 +159,11 @@ class OutputProcessor:
         self.tokenizer = tokenizer
         self.log_stats = log_stats
         self.request_states: dict[str, RequestState] = {}
+        #: R11.7. Client request id -> its `ParentRequest`. Upstream keeps the same
+        #: map for the same reason: under `n > 1` the id a client holds names no
+        #: engine request, so an abort arriving with it has to be expanded into the
+        #: children before it reaches anything.
+        self.parent_requests: dict[str, Any] = {}
         #: Requests the frontend ended on a stop string. The scheduler cannot see
         #: those -- it has no text -- so the core must be told to abort them.
         self.stopped_by_string: list[str] = []
@@ -182,10 +196,28 @@ class OutputProcessor:
             index=index,
             pooling_params=pooling_params,
         )
+        if parent_request is not None:
+            self.parent_requests[parent_request.request_id] = parent_request
 
-    def abort_requests(self, request_ids: list[str]) -> None:
+    def abort_requests(self, request_ids: list[str]) -> list[str]:
+        """Drop frontend state, expanding a parent id into its children. R11.7.
+
+        Returns the ids the *engine core* should abort, which is not what came in:
+        a client cancelling an `n > 1` request names an id the core never held, and
+        aborting that id would free nothing while the `n` children ran to
+        completion. Upstream expands the same way.
+        """
+        to_abort: list[str] = []
         for request_id in request_ids:
-            self.request_states.pop(request_id, None)
+            if self.request_states.pop(request_id, None) is not None:
+                to_abort.append(request_id)
+                continue
+            parent = self.parent_requests.pop(request_id, None)
+            if parent is not None:
+                for child_id in list(parent.child_requests):
+                    if self.request_states.pop(child_id, None) is not None:
+                        to_abort.append(child_id)
+        return to_abort
 
     def process_outputs(
         self,
@@ -350,7 +382,15 @@ class OutputProcessor:
     ) -> None:
         """Drop a finished request's frontend state and record what it contributed."""
         state.is_finished = True
-        if iteration_stats is not None:
+        parent = state.parent_request
+        # R11.7. One observation per *client* request, recorded when the last child
+        # lands -- upstream's `observe_finished_request` gates the same way. One per
+        # child would count an `n=4` request four times in every request-level
+        # histogram, so e2e latency and time-per-output-token would be weighted by n.
+        last_of_its_parent = parent is None or not parent.child_requests
+        if parent is not None and last_of_its_parent:
+            self.parent_requests.pop(parent.request_id, None)
+        if iteration_stats is not None and last_of_its_parent:
             iteration_stats.finished_requests.append(
                 state.finished_stats(now, str(finish_reason))
             )

@@ -166,6 +166,7 @@ observable rather than approximated.
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
 | a hybrid model (Gemma-3 style) | five windowed layers to every full one become six KV cache groups sharing one pool; KV per request is a blend, and `--disable-hybrid-kv-cache-manager` prices the same model without it |
 | `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
+| `seed` on a request | the same seed and parameters reproduce the same completion; a seeded `n > 1` request offsets its children so they stay distinct |
 | `/v1/embeddings` | each document is its own request: prefill and stop, no decode — so a page of them batches, queues, and shares a preamble through the prefix cache |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
 | an `image_url` content part | 256 placeholder tokens, a separate encoder budget, an encoder pass priced at ViT-L scale, and a cache the second request with the same image hits |

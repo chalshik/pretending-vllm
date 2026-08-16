@@ -241,9 +241,19 @@ def compute_memory_profile(
     layers_per_group = layers_local
     if kv_cache_groups:
         layers_per_group = max(len(group.layer_names) for group in kv_cache_groups)
-    kv_bytes_per_block = (
-        block_size * kv_bytes_per_token * layers_per_group // max(1, layers_local)
-    )
+        # Derived the way `EngineCore._initialize_kv_caches` derives it -- per-layer
+        # page size times layers per group -- rather than by rescaling the model's
+        # per-token cost. The rescaling involved two integer divisions that drifted
+        # whenever `num_hidden_layers % pp_size` was non-zero, so the profile printed
+        # one `num_gpu_blocks` in the startup line and the scheduler was handed
+        # another. Not cosmetic: R10.6's "no request could ever be served" guard ran
+        # on the larger number, so a config that could not fit a single request
+        # passed startup and then hung forever with no error and no log line.
+        kv_bytes_per_block = (
+            kv_cache_groups[0].kv_cache_spec.page_size_bytes * layers_per_group
+        )
+    else:
+        kv_bytes_per_block = block_size * kv_bytes_per_token
 
     # R16.1. Adapter weights are resident on the device and come out of the same
     # budget as everything else, so serving eight adapters shrinks the KV pool.

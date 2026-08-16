@@ -83,13 +83,22 @@ class OpenAIServingEmbedding:
     async def create_embedding(
         self, request: EmbeddingRequest, raw_request: Request | None = None
     ) -> EmbeddingResponse | JSONResponse:
-        served, _ = (
+        # R16.1. The adapter, not just whether the name is served. Discarding it
+        # returned 200 with `model: adapter-a` while the engine request carried no
+        # adapter at all -- the corpus was hashed into the *base* model's
+        # prefix-cache partition (C3) and cost no adapter memory, so the capacity
+        # answer was the base model's reported as the adapter's.
+        served, lora_request = (
             self.models.resolve(request.model)
             if self.models is not None
             else (request.model in self.served_model_names, None)
         )
         if not served:
-            return model_not_found(request.model, self.served_model_names)
+            return model_not_found(
+                request.model,
+                self.served_model_names
+                + (list(self.models.lora_modules) if self.models is not None else []),
+            )
 
         if request.encoding_format != "float":
             return create_error_response(
@@ -111,22 +120,56 @@ class OpenAIServingEmbedding:
         async def one(index: int, prompt: str | list[int]) -> Any:
             # Every document is its own engine request, which is what makes a page
             # of them queue, batch and share prefixes the way it would in production.
-            async for output in self.engine.encode(
+            stream = self.engine.encode(
                 prompt,
                 pooling_params,
                 f"{request_id}-{index}",
                 priority=request.priority,
-            ):
-                if output.finished:
-                    return output
+                lora_request=lora_request,
+            )
+            try:
+                async for output in stream:
+                    if output.finished:
+                        return output
+            finally:
+                # Closed explicitly rather than left to cancellation: an async
+                # generator's `finally` -- which is what aborts the request in the
+                # core -- runs on `aclose()` or on garbage collection, and waiting
+                # for the collector means waiting an unbounded time while the engine
+                # still holds the blocks.
+                await stream.aclose()
             raise RuntimeError(f"embedding request {request_id}-{index} produced none")
 
-        try:
-            outputs = await asyncio.gather(
-                *(one(index, prompt) for index, prompt in enumerate(prompts))
-            )
-        except Exception as exc:
-            return to_error_response(exc)
+        tasks = [
+            asyncio.ensure_future(one(index, prompt))
+            for index, prompt in enumerate(prompts)
+        ]
+        # FIRST_EXCEPTION, not `gather`. One bad document must not leave its siblings
+        # running: `gather` waits for every task whatever happens, so a 400 returned
+        # while the good documents were still prefilling left the engine holding
+        # their blocks until they finished on their own -- and R2.4 says an abandoned
+        # request's blocks come back within one step. Upstream gets the same effect
+        # from `merge_async_iterators`, whose `finally` closes the rest.
+        finished, pending = await asyncio.wait(
+            tasks, return_when=asyncio.FIRST_EXCEPTION
+        )
+        failure = next(
+            (
+                exc
+                for exc in (task.exception() for task in finished)
+                if isinstance(exc, Exception)
+            ),
+            None,
+        )
+        if failure is not None:
+            for task in pending:
+                task.cancel()
+            # Awaited so each cancellation actually runs the generator's `finally`,
+            # which is what issues the abort. Returning before that would report the
+            # error while the siblings were still holding KV.
+            await asyncio.gather(*pending, return_exceptions=True)
+            return to_error_response(failure)
+        outputs = [task.result() for task in tasks]
 
         prompt_tokens = sum(len(output.prompt_token_ids) for output in outputs)
         return EmbeddingResponse(

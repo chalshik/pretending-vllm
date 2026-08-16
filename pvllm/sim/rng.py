@@ -73,8 +73,16 @@ class RngFactory:
             self._request_cache[request_id] = generator
         return generator
 
-    def for_position(self, request_id: str, position: int) -> np.random.Generator:
+    def for_position(
+        self, request_id: str, position: int, seed: int | None = None
+    ) -> np.random.Generator:
         """A generator for one request's token at one output position. R19.2.
+
+        `seed` is the *request's* own `SamplingParams.seed` when it set one, and the
+        engine seed otherwise. A client asking for a specific seed is asking for a
+        reproducible completion, and honouring it here is the only place that can
+        mean anything -- the branch in `ParentRequest._child_params` that offsets a
+        seeded parent's children was, until this existed, an elaborate no-op.
 
         Derived from `(seed, request_id, position)` rather than drawn from the
         request's stream, so `for_position(r, 7)` gives the same answer however many
@@ -94,7 +102,17 @@ class RngFactory:
         Uncached, unlike `for_request`: the whole point is that the answer depends on
         the key rather than on history, so there is no stream state to keep.
         """
-        entropy = _derive_entropy(self._seed, "position", f"{request_id}:{position}")
+        # A client-supplied seed replaces the request id as well as the engine seed:
+        # `seed` means "this completion", so two requests carrying the same seed and
+        # the same parameters must produce the same text. Keeping the id in the key
+        # would make the field mean "some completion, reproducibly", which is not
+        # what any client sets it for. Without one, the id is what separates two
+        # concurrent requests.
+        entropy = (
+            _derive_entropy(self._seed, "position", f"{request_id}:{position}")
+            if seed is None
+            else _derive_entropy(seed, "seeded-position", str(position))
+        )
         return np.random.default_rng(np.random.SeedSequence(entropy))
 
     def for_constraint(self, request_id: str) -> np.random.Generator:

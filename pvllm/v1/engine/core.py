@@ -179,14 +179,22 @@ class EngineCore:
 
     def abort_requests(self, request_ids: list[str]) -> None:
         """R2.4: blocks come back within one step."""
-        for request_id in request_ids:
+        # R19.3. Only ids the core actually holds. An id it never had produces no
+        # record: a trace claiming an abort that did not happen is worse than one
+        # that is silent, because it is read as evidence.
+        held = [
+            request_id
+            for request_id in request_ids
+            if request_id in self.scheduler.requests
+        ]
+        for request_id in held:
             self.trace.emit(
                 "request",
                 t=self.clock.time(),
                 request_id=request_id,
                 event="aborted",
             )
-        self.scheduler.finish_requests(request_ids, RequestStatus.FINISHED_ABORTED)
+        self.scheduler.finish_requests(held, RequestStatus.FINISHED_ABORTED)
 
     # --- the loop ------------------------------------------------------------
 

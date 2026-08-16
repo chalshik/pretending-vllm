@@ -66,7 +66,29 @@ class SimSharedStoreConnector(KVConnectorBase):
                 "hash, and no block hashes are computed with "
                 "--no-enable-prefix-caching. Nothing would be published or matched."
             )
-        if cache_config.sliding_window is not None:
+        # The *effective* window, not just the flag. M5c let a model card carry its
+        # own window, and checking only `cache_config.sliding_window` meant a hybrid
+        # card slipped past this refusal -- the connector then started cleanly,
+        # issued no lookup ever, and reported zero hits forever. A disaggregation
+        # study on exactly the model class M5c added would have concluded the store
+        # buys nothing, when nothing was ever asked of it.
+        from pvllm.sim.model_db import load_model_card
+
+        windowed = cache_config.sliding_window is not None
+        if not windowed:
+            try:
+                card = load_model_card(
+                    (
+                        vllm_config.sim_config.model_card
+                        if vllm_config.sim_config
+                        else None
+                    )
+                    or vllm_config.model_config.model
+                )
+            except (KeyError, FileNotFoundError):
+                card = None
+            windowed = card is not None and card.sliding_window is not None
+        if windowed:
             raise NotImplementedError(
                 "a KV connector with sliding-window attention is not implemented. A "
                 "windowed request drops blocks behind its window, so its published "

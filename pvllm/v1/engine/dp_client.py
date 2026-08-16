@@ -95,9 +95,12 @@ class DPInprocClient(EngineCoreClient):
         #: counter beside the coordinator's snapshot, because the count is exact
         #: while a snapshot can be stale.
         self.engine_inflight: list[int] = [0] * self.data_parallel_size
-        #: Where the next scan starts. Rotated on every routed request so ties do not
-        #: systematically favour replica 0 -- without it a burst of requests arriving
-        #: at an idle deployment all land on the same replica.
+        #: Where the scan starts. Upstream rotates this per request to break ties;
+        #: here the in-flight counter below is incremented on every routed request,
+        #: so the previously-chosen replica already scores strictly higher and the
+        #: tie the rotation exists to break never arises. Kept at zero, and the scan
+        #: order is therefore fixed -- stated because the rotation *was* here, was
+        #: inert, and the comment claiming otherwise outlived two readings.
         self.scan_start = 0
 
     @staticmethod
@@ -157,7 +160,6 @@ class DPInprocClient(EngineCoreClient):
                 if score < min_score:
                     min_score = score
                     chosen = index
-            self.scan_start = (self.scan_start + 1) % self.data_parallel_size
 
         self.request_to_engine[request.request_id] = chosen
         self.engine_inflight[chosen] += 1
@@ -238,8 +240,15 @@ class DPInprocClient(EngineCoreClient):
         return sum(engine.get_num_unfinished_requests() for engine in self.engine_cores)
 
     def reset_prefix_cache(self) -> bool:
-        """Reset every replica's cache. They are separate caches, so all or none."""
-        return all(engine.reset_prefix_cache() for engine in self.engine_cores)
+        """Reset every replica's cache. R6.10.
+
+        Every replica is reset before the answer is computed. `all()` over a
+        generator short-circuits, which would wipe the replicas before the first
+        refusal, skip the ones after it, and report failure for the whole deployment
+        -- leaving an operator told the cache was untouched with half of it gone.
+        """
+        results = [engine.reset_prefix_cache() for engine in self.engine_cores]
+        return all(results)
 
     def make_stats(self) -> dict[str, Any]:
         """The deployment's numbers, aggregated the way each one means something.
@@ -260,13 +269,19 @@ class DPInprocClient(EngineCoreClient):
             "num_accepted_tokens",
             "mm_cache_queries",
             "mm_cache_hits",
-            "external_prefix_cache_queries",
-            "external_prefix_cache_hits",
         )
         stats: dict[str, Any] = dict(per_engine[0])
         for key in summed:
             if key in stats:
                 stats[key] = sum(engine.get(key, 0) for engine in per_engine)
+        # R17.2. *Not* summed. The KV connector's store is a process-global keyed by
+        # name, so every replica's connector resolves to the same object and reads
+        # the same counter -- summing N identical readings of one shared counter
+        # reported N times the transfers that happened, straight into
+        # `vllm:external_prefix_cache_*` (C6). One reading is the deployment's.
+        for key in ("external_prefix_cache_queries", "external_prefix_cache_hits"):
+            if key in stats:
+                stats[key] = per_engine[0].get(key, 0)
         stats["kv_cache_usage"] = sum(
             float(engine.get("kv_cache_usage", 0.0)) for engine in per_engine
         ) / len(per_engine)

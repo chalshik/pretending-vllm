@@ -31,7 +31,7 @@ from pvllm.sim.device import SimDevice
 from pvllm.sim.model import SimModel
 from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
 from pvllm.v1.core.sched.output import SchedulerOutput
-from pvllm.v1.kv_cache_interface import KVCacheConfig
+from pvllm.v1.kv_cache_interface import KVCacheConfig, SlidingWindowSpec
 from pvllm.v1.outputs import LogprobsLists, ModelRunnerOutput
 from pvllm.v1.worker.gpu.attn_utils import build_attn_metadata
 from pvllm.v1.worker.gpu.block_table import BlockTables
@@ -110,12 +110,25 @@ class SimModelRunner:
         block_sizes = [
             group.kv_cache_spec.block_size for group in kv_cache_config.kv_cache_groups
         ]
+        # R6.7 + R8.3. The *effective* setting, matching `KVCacheManager.__init__`:
+        # a windowed group turns prefix caching off for the whole pool. Reading the
+        # config's request instead left the worker believing caching was on for every
+        # windowed model, which silently disabled the cross-request ownership oracle
+        # exactly where its own docstring says it is sound and needed.
+        windowed = [
+            isinstance(group.kv_cache_spec, SlidingWindowSpec)
+            for group in kv_cache_config.kv_cache_groups
+        ]
         self.block_tables = BlockTables(
             block_sizes=block_sizes,
             max_num_reqs=self.max_num_reqs,
             max_model_len=self.max_model_len,
             max_num_batched_tokens=self.max_num_batched_tokens,
-            enable_caching=self.vllm_config.cache_config.enable_prefix_caching,
+            enable_caching=(
+                self.vllm_config.cache_config.enable_prefix_caching
+                and not any(windowed)
+            ),
+            windowed_groups=windowed,
         )
 
     def capture_model(self) -> float:
@@ -166,6 +179,11 @@ class SimModelRunner:
             # exactly as it does upstream -- no extra channel, and nothing above the
             # boundary needs to know what the simulated model does with it.
             self._maybe_set_constraint(new_req.req_id, new_req.sampling_params)
+            # R11.2. And the request's own seed, if it set one -- it rides on
+            # `sampling_params` like the constraint does, for the same reason.
+            self.sim_model.set_request_seed(
+                new_req.req_id, getattr(new_req.sampling_params, "seed", None)
+            )
             # R18.1. Kept so the cost model can price this step's encoder work; the
             # scheduler sends input *ids*, and their sizes live on the request.
             if new_req.mm_features:

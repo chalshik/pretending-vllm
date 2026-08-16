@@ -133,8 +133,10 @@ class LLMEngine:
             )
 
     def abort_request(self, request_ids: list[str]) -> None:
-        self.engine_core.abort_requests(request_ids)
-        self.output_processor.abort_requests(request_ids)
+        # R11.7: a client id may name `n` engine requests, or none.
+        to_abort = self.output_processor.abort_requests(request_ids)
+        if to_abort:
+            self.engine_core.abort_requests(to_abort)
 
     def step(self) -> list[RequestOutput | PoolingRequestOutput]:
         """Run one engine step and return whatever finished or advanced."""

@@ -104,6 +104,13 @@ class InputProcessor:
         self, request_id: str, prompt_token_ids: list[int]
     ) -> None:
         """R2.5 for pooling: the prompt alone must fit the context window."""
+        # The same guard the generation path opens with, and for the same reason: a
+        # zero-token request is admitted, is scheduled with nothing to compute, never
+        # advances, and `has_unfinished_requests()` never goes false. A pooling
+        # request has no sampled token to end it either, so it hangs the engine
+        # rather than merely stalling. Caught here so the client gets a 400.
+        if not prompt_token_ids:
+            raise ValueError("Prompt cannot be empty.")
         max_model_len = self.model_config.max_model_len
         assert max_model_len is not None
         if len(prompt_token_ids) > max_model_len:

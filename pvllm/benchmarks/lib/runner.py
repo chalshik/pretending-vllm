@@ -60,6 +60,7 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
     agree by construction rather than by coincidence.
     """
     from pvllm.v1.engine.core_client import InprocClient
+    from pvllm.v1.engine.dp_client import DPInprocClient
 
     llm_engine = engine.llm_engine
     core = llm_engine.engine_core
@@ -67,7 +68,13 @@ def run_workload(engine: LLM, requests: list[BenchRequest]) -> RunResult:
     # directly, which no frontend may do across a process boundary (R19.1) -- and a
     # multiprocess benchmark would be measuring IPC scheduling on top of the modeled
     # timeline anyway, which is not what any of these numbers claim to be.
-    assert isinstance(core, InprocClient), (
+    # R13.3: a data-parallel deployment is `data_parallel_size` in-process cores, and
+    # it satisfies the same requirement -- `DPInprocClient.clock_time` is the slowest
+    # replica's, which is exactly the deployment's elapsed time. Naming only
+    # `InprocClient` here rejected every `pvllm bench ... -dp N` run *after* building
+    # all N replicas, with an error blaming multiprocessing the operator never turned
+    # on.
+    assert isinstance(core, InprocClient | DPInprocClient), (
         "benchmarks drive the in-process engine core; the multiprocess client cannot "
         "skip idle time, and its numbers would include IPC latency the cost model "
         "does not model"

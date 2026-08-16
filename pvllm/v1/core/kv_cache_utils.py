@@ -493,8 +493,13 @@ def get_kv_cache_groups(
         num_groups = -(-len(layers) // group_size)
         padding = num_groups * group_size - len(layers)
         if padding:
+            # Not literally added: the short group holds fewer layers, and the pool
+            # is sized from the *longest* group, so those slots are paid for and
+            # unused. Reported as waste rather than as an addition -- the earlier
+            # wording named an operation that never happened, and the code then
+            # refused the very pattern it had just claimed to pad.
             logger.warning(
-                "Hybrid KV cache: %d padding layer(s) added to a group of %d, "
+                "Hybrid KV cache: %d layer slot(s) in a group of %d go unused, "
                 "wasting at most %.1f%% of the KV pool [modeled]",
                 padding,
                 group_size,
@@ -508,17 +513,20 @@ def get_kv_cache_groups(
         for layer_names in grouped
     ]
 
-    # The invariant the whole scheme rests on. Checked rather than assumed: a
-    # violation means the pool cannot be divided into equal pages, and every block
-    # count downstream would be wrong in a way no test would name.
-    page_sizes = {
-        group.kv_cache_spec.page_size_bytes * len(group.layer_names) for group in groups
-    }
+    # The invariant the whole scheme rests on, stated the way upstream states it:
+    # every *layer* must occupy the same bytes per block. Group lengths need not
+    # match. A bucket that does not divide evenly leaves one short group, and
+    # upstream allocates `max(len(layer_names))` tensors and simply lets the short
+    # group index fewer of them -- which is what "padding" means there. Requiring
+    # equal group *lengths* refused patterns upstream accepts: `hybrid-4b` at
+    # `pipeline_parallel_size=2` is 2 full and 13 windowed layers per stage, so the
+    # windowed bucket stripes into six groups of 2 and one of 1, and the engine died
+    # at startup immediately after logging that it had added padding it never added.
+    page_sizes = {group.kv_cache_spec.page_size_bytes for group in groups}
     if len(page_sizes) != 1:
         raise NotImplementedError(
-            f"this model's KV cache groups would need pages of {sorted(page_sizes)} "
-            f"bytes. Every group must occupy the same bytes per block, or the pool "
-            f"fragments; upstream assumes the same. Layers per group and bytes per "
-            f"token per layer must both be uniform."
+            f"this model's attention layers would need pages of {sorted(page_sizes)} "
+            f"bytes each. Every layer must occupy the same bytes per block, or the "
+            f"pool fragments; upstream assumes the same."
         )
     return groups

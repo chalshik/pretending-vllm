@@ -64,8 +64,18 @@ class EngineIntrospector:
         which is the worst moment to discover a configuration is unsupported.
         """
         from pvllm.v1.engine.core_client import InprocClient
+        from pvllm.v1.engine.dp_client import DPInprocClient
 
-        if not isinstance(self.engine.engine_core, InprocClient):
+        client = self.engine.engine_core
+        if isinstance(client, DPInprocClient):
+            # R13.3. Replica 0's state, and said rather than implied: every number
+            # below describes one replica, not the deployment. `/metrics` is the
+            # aggregate surface. Rejecting DP outright -- which is what naming only
+            # `InprocClient` did -- made `--data-parallel-size N
+            # --enable-debug-endpoints` fail at startup with an error about an
+            # environment variable the operator never set.
+            return
+        if not isinstance(client, InprocClient):
             raise NotImplementedError(
                 "the /debug/* endpoints read engine state directly and need the "
                 "in-process engine core, but this server was started with "
@@ -81,9 +91,13 @@ class EngineIntrospector:
         # but the type checker cannot carry that across, and an untyped reach into
         # the client would hide a real mistake behind `Any`.
         from pvllm.v1.engine.core_client import InprocClient
+        from pvllm.v1.engine.dp_client import DPInprocClient
 
         client = self.engine.engine_core
-        assert isinstance(client, InprocClient)
+        # R13.3. Replica 0 for a data-parallel deployment. `_check_in_process` allows
+        # it, so this has to as well -- and both say the same thing: every number
+        # below describes one replica. `/metrics` is the aggregate surface.
+        assert isinstance(client, InprocClient | DPInprocClient)
         return client.engine_core
 
     # --- scheduler -----------------------------------------------------------
