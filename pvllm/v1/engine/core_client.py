@@ -47,8 +47,23 @@ class EngineCoreClient(ABC):
                 )
             from pvllm.v1.engine.core_client_mp import AsyncMPClient, SyncMPClient
 
+            if vllm_config.parallel_config.data_parallel_size > 1:
+                raise NotImplementedError(
+                    "data parallelism over the multiprocess engine core is not "
+                    "implemented: upstream runs one core process per replica behind "
+                    "a ZeroMQ coordinator, and this build's replicas share a process "
+                    "(requirement R13.3). Use the in-process core, which models the "
+                    "routing and the partitioned prefix cache faithfully."
+                )
             client_class = AsyncMPClient if asyncio_mode else SyncMPClient
             return client_class(vllm_config, log_stats=log_stats)
+        if vllm_config.parallel_config.data_parallel_size > 1:
+            # R13.3. Several whole engines behind a router, rather than one engine.
+            from pvllm.v1.engine.dp_client import DPInprocClient
+
+            return DPInprocClient(
+                vllm_config, executor_class=executor_class, log_stats=log_stats
+            )
         return InprocClient(
             vllm_config, executor_class=executor_class, log_stats=log_stats
         )

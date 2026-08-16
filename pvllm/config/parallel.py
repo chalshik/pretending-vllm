@@ -49,14 +49,10 @@ class ParallelConfig:
         # `RooflineCostModel`. What is *not* modeled is the throughput gain
         # pipeline parallelism gets from overlapping microbatches, because there
         # are no virtual engines here; see the note in `RooflineCostModel`.
-        if self.data_parallel_size > 1:
-            raise NotImplementedError(
-                "data parallel replicas (requirement R13.3) are independent engines "
-                "sharing a router, not a sharded one. Run `data_parallel_size` "
-                "separate pretending-vllm instances and put your own load balancer "
-                "in front -- that is what the deployment does, and simulating the "
-                "router here would tell you about the router rather than the engine."
-            )
+        # R13.3. Data parallel replicas are independent whole engines behind a
+        # router, not a sharded one: each holds its own weights, its own device and
+        # its own KV pool. `world_size` is per replica, which is why it does not
+        # include `data_parallel_size`.
         if self.enable_expert_parallel:
             raise NotImplementedError(
                 "expert parallelism shards MoE experts across devices, which changes "

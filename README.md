@@ -15,9 +15,9 @@ See [UPSTREAM.md](UPSTREAM.md).
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, KV
-> disaggregation, `n > 1`, `/v1/embeddings`, and hybrid full/windowed models all work. Data and
-> expert parallelism, real KV transports, and a KV connector paired with a sliding window are not
-> implemented and refuse by name.
+> disaggregation, `n > 1`, `/v1/embeddings`, hybrid full/windowed models, and data parallelism all
+> work. Expert parallelism, real KV transports, a KV connector paired with a sliding window, and
+> data parallelism over the multiprocess core are not implemented and refuse by name.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -158,6 +158,7 @@ observable rather than approximated.
 
 | | what it changes |
 |---|---|
+| `--data-parallel-size N` | N whole engines behind a load-aware router: throughput multiplies, per-request latency does not — and the prefix cache is partitioned N ways, so a shared preamble is recomputed on every replica that sees one |
 | `--tensor-parallel-size` | shards KV and weights per device; near-linear speedup on prefill, sublinear on decode |
 | `--pipeline-parallel-size` | shards layers per device; **same step latency**, less memory (no microbatch overlap is modeled) |
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |

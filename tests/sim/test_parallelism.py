@@ -71,11 +71,14 @@ def test_tensor_and_pipeline_parallelism_are_accepted():
     )
 
 
-def test_data_parallelism_points_at_running_more_engines():
-    """Replicas are independent engines behind a router, not a sharded one. The
-    interesting behavior would be the router's, not this engine's."""
-    with pytest.raises(NotImplementedError, match="separate pretending-vllm instances"):
-        ParallelConfig(data_parallel_size=2)
+def test_data_parallelism_does_not_shard_anything():
+    """R13.3. Replicas are independent whole engines behind a router. `world_size` is
+    per replica, so it counts the tensor and pipeline dimensions and not this one --
+    a data-parallel replica holds the *same* weights as its siblings, not a share of
+    them."""
+    config = ParallelConfig(data_parallel_size=4, tensor_parallel_size=2)
+    assert config.world_size == 2
+    assert config.data_parallel_size == 4
 
 
 # --- memory (the capacity answer) ------------------------------------------
