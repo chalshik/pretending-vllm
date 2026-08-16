@@ -97,31 +97,12 @@ class KVCacheManager:
         self.block_size = kv_cache_config.block_size
         from pvllm.v1.kv_cache_interface import SlidingWindowSpec
 
-        # R6.7. A windowed group needs the null block to stand in for evicted slots.
-        #
-        # **A known divergence from upstream, and it costs a real number.** Prefix
-        # caching is switched off for the *whole pool* when any group slides. Upstream
-        # does not do that: `find_longest_cache_hit` is per group, so a hybrid model
-        # keeps caching its full-attention groups and only the windowed ones lose it.
-        # A Gemma-3-class deployment therefore reports a 0% hit rate here where real
-        # vLLM caches roughly the fraction of layers that are full attention -- 1 in 6
-        # for `hybrid-4b`. Reproducing upstream needs per-group hit resolution, which
-        # `get_computed_blocks` does not have: it resolves one group and a hit has to
-        # be valid in every group before the scheduler may act on it.
-        #
-        # Stated here rather than discovered from a capacity plan. It is on the list.
+        # R6.7. A windowed group needs the null block to stand in for the prefix its
+        # window no longer attends to.
         self.has_sliding_window = any(
             isinstance(group.kv_cache_spec, SlidingWindowSpec)
             for group in kv_cache_config.kv_cache_groups
         )
-        if self.has_sliding_window and enable_caching:
-            logger.info(
-                "Prefix caching disabled: this model has sliding-window attention. "
-                "Upstream keeps caching a hybrid model's full-attention groups and "
-                "only this engine turns it off pool-wide (R6.7), so a hit rate "
-                "reported for a hybrid model here is a floor, not the answer."
-            )
-            enable_caching = False
 
         self.block_pool = BlockPool(
             kv_cache_config.num_blocks,
@@ -180,22 +161,30 @@ class KVCacheManager:
 
         self.prefix_cache_stats.queries += request.num_tokens
 
-        computed: list[KVCacheBlock] = []
-        for block_hash in request.block_hashes:
-            block = self.block_pool.get_cached_block(block_hash, group_id=0)
-            if block is None:
-                break
-            computed.append(block)
+        # R6.7. Resolved across *every* group, because a hit is only usable if every
+        # group can serve it: the scheduler advances one `num_computed_tokens` for the
+        # request, and a group that cannot supply those tokens would be read for KV
+        # that was never written. Turning caching off pool-wide whenever any group
+        # slid was the older answer -- simple, and it cost a hybrid model its whole
+        # hit rate where upstream keeps the full-attention groups cached.
+        per_group, num_computed_tokens = self.coordinator.find_longest_cache_hit(
+            list(request.block_hashes), request.num_tokens
+        )
 
-        num_computed_tokens = len(computed) * self.block_size
-        if computed and num_computed_tokens == request.num_tokens:
-            computed.pop()
+        if num_computed_tokens == request.num_tokens:
+            # At least one token is always recomputed. A request whose every block is
+            # cached would otherwise be scheduled with zero new tokens -- nothing to
+            # run, no logits, no sampled token -- and would never progress.
             num_computed_tokens -= self.block_size
+            trimmed = -(-num_computed_tokens // self.block_size)
+            per_group = tuple(list(blocks[:trimmed]) for blocks in per_group)
 
         self.prefix_cache_stats.hits += num_computed_tokens
-        if not computed:
+        if num_computed_tokens <= 0:
             return self._empty_blocks, 0
-        return KVCacheBlocks((computed,)), num_computed_tokens
+        return KVCacheBlocks(tuple(list(blocks) for blocks in per_group)), (
+            num_computed_tokens
+        )
 
     # --- allocation ----------------------------------------------------------
 
@@ -231,11 +220,22 @@ class KVCacheManager:
 
         # Blocks hit in the cache are adopted before counting what is still needed,
         # so a request with a long shared prefix asks the pool for almost nothing.
-        cached_blocks = (
-            new_computed_blocks.blocks[0]
+        # R6.7. Per group: a hybrid model's groups hit different numbers of blocks
+        # (a windowed group's list is mostly the null block), so flattening to group 0
+        # would adopt one group's blocks into all of them.
+        per_group_cached: tuple[list[KVCacheBlock], ...] = (
+            new_computed_blocks.blocks
             if new_computed_blocks is not None and new_computed_blocks.num_blocks
-            else []
+            else tuple([] for _ in range(self.num_kv_cache_groups))
         )
+        # Flattened only for the *pool* arithmetic below, which counts physical
+        # blocks. The null block is shared and pinned, so it is never one of them.
+        cached_blocks = [
+            block
+            for group_blocks in per_group_cached
+            for block in group_blocks
+            if not block.is_null
+        ]
 
         num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
             request.request_id, num_tokens_needing_slots
@@ -259,7 +259,7 @@ class KVCacheManager:
             # Take a reference and pull them out of the free queue before anything
             # else can claim them (R6.5).
             self.block_pool.touch(cached_blocks)
-            self.coordinator.adopt_cached_blocks(request.request_id, (cached_blocks,))
+            self.coordinator.adopt_cached_blocks(request.request_id, per_group_cached)
 
         new_blocks = self.coordinator.allocate_new_blocks(
             request.request_id, num_tokens_needing_slots
@@ -277,16 +277,24 @@ class KVCacheManager:
         waiting would miss every hit from a request running concurrently with this
         one -- which is the case a prefix cache mostly exists to serve.
         """
-        blocks = self.coordinator.get_blocks(request.request_id)[0]
         num_full_blocks = min(num_tokens // self.block_size, len(request.block_hashes))
-        num_already_cached = sum(1 for b in blocks if b.block_hash is not None)
-        self.block_pool.cache_full_blocks(
-            list(request.block_hashes),
-            list(blocks),
-            num_already_cached,
-            num_full_blocks,
-            group_id=0,
-        )
+        # Per group. Caching only group 0 would publish hashes a *different* group is
+        # expected to answer for, so a later request would hit on a group that never
+        # stored the block -- the same class of corruption the cross-group hit
+        # resolution above exists to prevent, arrived at from the other side.
+        for group_id, blocks in enumerate(
+            self.coordinator.get_blocks(request.request_id)
+        ):
+            if not blocks:
+                continue
+            num_already_cached = sum(1 for b in blocks if b.block_hash is not None)
+            self.block_pool.cache_full_blocks(
+                list(request.block_hashes),
+                list(blocks),
+                num_already_cached,
+                num_full_blocks,
+                group_id=group_id,
+            )
 
     # --- release -------------------------------------------------------------
 

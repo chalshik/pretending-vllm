@@ -203,14 +203,20 @@ def test_a_full_attention_engine_reserves_no_null_block():
 # --- prefix caching interaction --------------------------------------------
 
 
-def test_prefix_caching_is_disabled_under_a_window():
-    """A cached block is only reusable while the prefix leading to it is still
-    attended to, and inside a window it usually is not. Reusing one would hand a
-    request KV for tokens the model can no longer see."""
+def test_a_windowed_group_caches_the_tail_its_window_attends_to():
+    """R6.4, R6.7. A windowed group does not need the whole prefix -- only the last
+    `window` tokens are ever read -- so upstream searches right to left for a
+    contiguous run covering the window and fills everything before it with the null
+    block. Turning caching off pool-wide was the older answer here, and it cost a
+    hybrid model its entire hit rate.
+
+    The null blocks are what make it safe: the request is handed a block table whose
+    early entries are the shared placeholder, so nothing reads KV for tokens the model
+    can no longer see."""
     engine = LLM(**BASE, sliding_window=64, enable_prefix_caching=True)
     try:
         manager = engine.llm_engine.engine_core.engine_core.scheduler.kv_cache_manager
         assert manager.has_sliding_window
-        assert not manager.enable_caching
+        assert manager.enable_caching
     finally:
         engine.shutdown()

@@ -10,13 +10,15 @@ group what it needs, checks the total against the pool once, and only then alloc
 
 from __future__ import annotations
 
+from typing import Any
+
 from pvllm.v1.core.block_pool import BlockPool
 from pvllm.v1.core.kv_cache_utils import KVCacheBlock
 from pvllm.v1.core.single_type_kv_cache_manager import (
     SingleTypeKVCacheManager,
     get_manager_for_kv_cache_spec,
 )
-from pvllm.v1.kv_cache_interface import KVCacheConfig
+from pvllm.v1.kv_cache_interface import KVCacheConfig, SlidingWindowSpec
 
 
 class KVCacheCoordinator:
@@ -40,6 +42,65 @@ class KVCacheCoordinator:
     @property
     def num_groups(self) -> int:
         return len(self.single_type_managers)
+
+    def find_longest_cache_hit(
+        self, block_hashes: list[Any], max_length: int
+    ) -> tuple[tuple[list[KVCacheBlock], ...], int]:
+        """The longest prefix *every* group can serve. R6.4, R6.7, C3.
+
+        Upstream's fixed-point: each attention type either accepts the candidate
+        length or reduces it, and any reduction restarts the pass. It converges
+        because the length only ever decreases.
+
+        The reason it has to iterate rather than take a minimum: the two types answer
+        different questions. A full-attention group needs the prefix from token zero,
+        so its hit is downward-closed -- shortening the candidate only trims it. A
+        windowed group needs a contiguous run covering its window *ending at the
+        candidate*, so moving the candidate can invalidate the run it just found and
+        force a different one. Asking each type once and taking the smallest answer
+        would report a hit the windowed group cannot actually serve.
+
+        Returns `(blocks per group, hit tokens)`.
+        """
+        num_groups = len(self.single_type_managers)
+        hit_length = max_length
+        blocks_by_group: list[list[KVCacheBlock] | None] = [None] * num_groups
+        length_by_group: list[int] = [0] * num_groups
+
+        while True:
+            current = hit_length
+            for group_id, manager in enumerate(self.single_type_managers):
+                spec = self.kv_cache_config.kv_cache_groups[group_id].kv_cache_spec
+                if not isinstance(spec, SlidingWindowSpec) and (
+                    blocks_by_group[group_id] is not None
+                ):
+                    # Full attention is downward-closed: look it up once, then trim.
+                    current = min(current, length_by_group[group_id])
+                    continue
+                blocks, found = type(manager).find_longest_cache_hit(
+                    block_hashes=block_hashes,
+                    max_length=current,
+                    block_pool=self.block_pool,
+                    kv_cache_spec=spec,
+                    group_id=group_id,
+                )
+                current = found
+                blocks_by_group[group_id] = blocks
+                length_by_group[group_id] = found
+            if current >= hit_length:
+                break
+            hit_length = current
+
+        # Trim the full-attention groups to the reconciled length; a windowed group's
+        # list already ends where its run does.
+        num_blocks = -(-hit_length // self.kv_cache_config.block_size)
+        for group_id, group in enumerate(self.kv_cache_config.kv_cache_groups):
+            group_blocks = blocks_by_group[group_id]
+            if group_blocks is not None and not isinstance(
+                group.kv_cache_spec, SlidingWindowSpec
+            ):
+                del group_blocks[num_blocks:]
+        return tuple(blocks or [] for blocks in blocks_by_group), hit_length
 
     def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
         """Total new blocks across every group.

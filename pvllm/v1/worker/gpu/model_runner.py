@@ -124,10 +124,15 @@ class SimModelRunner:
             max_num_reqs=self.max_num_reqs,
             max_model_len=self.max_model_len,
             max_num_batched_tokens=self.max_num_batched_tokens,
-            enable_caching=(
-                self.vllm_config.cache_config.enable_prefix_caching
-                and not any(windowed)
-            ),
+            # R8.3. The pool's *effective* setting, which is now simply the config's:
+            # a windowed group caches too (its hit is the tail its window attends to),
+            # so the cross-request ownership oracle must stay off whenever caching is
+            # on -- two requests sharing a cached prefix hold the same blocks on
+            # purpose, and that is the mechanism, not a double-allocation. `and not
+            # any(windowed)` was right only while a sliding window disabled caching
+            # pool-wide; it outlived that and made the oracle fire on legitimate
+            # sharing the moment hybrid models started caching.
+            enable_caching=self.vllm_config.cache_config.enable_prefix_caching,
             windowed_groups=windowed,
         )
 

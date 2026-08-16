@@ -314,3 +314,104 @@ def test_the_window_bounds_kv_for_the_windowed_groups():
         )
     finally:
         llm.shutdown()
+
+
+# --- prefix caching across groups --------------------------------------------
+
+
+def test_a_hybrid_model_caches_its_prefix_like_a_dense_one():
+    """R6.4, C3. Caching was switched off for the *whole pool* whenever any group
+    slid, so a Gemma-3-class deployment reported a 0% hit rate where real vLLM keeps
+    caching its full-attention groups. The number a capacity plan reads was the one
+    thing the feature was for."""
+    preamble = "a shared system preamble that fills several blocks of KV cache " * 10
+    prompts = [preamble + f"question {index}" for index in range(6)]
+
+    def hit_rate(model: str) -> float:
+        llm = LLM(
+            model=model,
+            device_card="datacenter-80gb",
+            max_model_len=4096,
+            block_size=16,
+            max_num_batched_tokens=1024,
+            max_num_seqs=4,
+            enable_prefix_caching=True,
+            disable_log_stats=True,
+            seed=1,
+        )
+        try:
+            llm.generate(prompts, SamplingParams(max_tokens=8))
+            stats = llm.llm_engine.make_stats()
+            return stats["prefix_cache_hits"] / max(1, stats["prefix_cache_queries"])
+        finally:
+            llm.shutdown()
+
+    assert hit_rate("hybrid-4b") > 0.5
+    # And it is not merely non-zero: the full-attention group serves the same prefix
+    # a dense model's would.
+    assert hit_rate("hybrid-4b") == pytest.approx(hit_rate("dense-8b"), rel=0.05)
+
+
+def test_the_hit_is_reconciled_across_groups_not_taken_from_one():
+    """A hit is only usable if *every* group can serve it: the scheduler advances one
+    `num_computed_tokens`, and a group that cannot supply those tokens would be read
+    for KV that was never written. The coordinator iterates to a fixed point because
+    the two types answer different questions -- full attention is downward-closed,
+    a windowed group needs a run covering its window *ending at the candidate*."""
+    llm = LLM(**BASE)
+    try:
+        manager = llm.llm_engine.engine_core.engine_core.scheduler.kv_cache_manager
+        assert manager.enable_caching
+        assert manager.num_kv_cache_groups == 6
+
+        engine = llm.llm_engine
+        prompt = [7] * 600
+        engine.add_request(
+            "warm", prompt, SamplingParams(max_tokens=4), pooling_params=None
+        )
+        while engine.has_unfinished_requests():
+            engine.step()
+        engine.add_request(
+            "hit", prompt, SamplingParams(max_tokens=4), pooling_params=None
+        )
+        while engine.has_unfinished_requests():
+            engine.step()
+
+        stats = engine.make_stats()
+        assert stats["prefix_cache_hits"] > 0
+        # Every group holds a block table for the request, and the pool's own
+        # invariants held throughout -- run this file with PVLLM_DEBUG_INVARIANTS=1.
+        assert manager.block_pool.get_num_free_blocks() == (
+            manager.block_pool.num_usable_blocks
+        )
+    finally:
+        llm.shutdown()
+
+
+def test_a_windowed_group_still_bounds_what_a_request_holds():
+    """Caching a windowed group must not resurrect the unbounded-KV behaviour a
+    window exists to prevent."""
+    llm = LLM(
+        model="tiny-test",
+        device_card="tiny-2gb",
+        max_model_len=512,
+        block_size=16,
+        max_num_batched_tokens=512,
+        sliding_window=64,
+        enable_prefix_caching=True,
+        disable_log_stats=True,
+    )
+    try:
+        engine = llm.llm_engine
+        engine.add_request(
+            "r0", [7] * 400, SamplingParams(max_tokens=64), pooling_params=None
+        )
+        pool = engine.engine_core.engine_core.scheduler.kv_cache_manager.block_pool
+        peak = 0
+        while engine.has_unfinished_requests():
+            engine.step()
+            peak = max(peak, pool.num_usable_blocks - pool.get_num_free_blocks())
+        # A 64-token window over 16-token blocks, not the 25 blocks the prompt spans.
+        assert peak <= 8, peak
+    finally:
+        llm.shutdown()

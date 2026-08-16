@@ -40,6 +40,23 @@ class SingleTypeKVCacheManager(ABC):
         #: tail first (R6.6).
         self.req_to_blocks: defaultdict[str, list[KVCacheBlock]] = defaultdict(list)
 
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: list[Any],
+        max_length: int,
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        group_id: int,
+    ) -> tuple[list[KVCacheBlock], int]:
+        """The longest prefix of `block_hashes` this group already holds. R6.4, C3.
+
+        Per *type*, because the two types answer differently: full attention wants
+        the longest run from the start, while a windowed group only needs the tail
+        that its window still attends to. Returns `(blocks, hit_tokens)`.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
         """How many *new* blocks holding `num_tokens` would need."""
@@ -151,6 +168,29 @@ class FullAttentionManager(SingleTypeKVCacheManager):
             num_common_blocks += 1
         return num_common_blocks
 
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: list[Any],
+        max_length: int,
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        group_id: int,
+    ) -> tuple[list[KVCacheBlock], int]:
+        """The longest run of cached blocks from the start. R6.4.
+
+        A miss ends the search: hashes are chained through their parent, so a block
+        that is not cached guarantees every block after it is not either.
+        """
+        block_size = kv_cache_spec.block_size
+        computed: list[KVCacheBlock] = []
+        for block_hash in block_hashes[: max_length // block_size]:
+            cached = block_pool.get_cached_block(block_hash, group_id=group_id)
+            if cached is None:
+                break
+            computed.append(cached)
+        return computed, len(computed) * block_size
+
 
 class SlidingWindowManager(FullAttentionManager):
     """Attention over a bounded window. R6.7.
@@ -188,6 +228,55 @@ class SlidingWindowManager(FullAttentionManager):
         so one extra block is needed to cover a window that straddles two.
         """
         return (self.sliding_window - 1 + self.block_size - 1) // self.block_size + 1
+
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: list[Any],
+        max_length: int,
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        group_id: int,
+    ) -> tuple[list[KVCacheBlock], int]:
+        """The tail this window still attends to. R6.4, R6.7.
+
+        A windowed group does not need the whole prefix -- only the last `window`
+        tokens are ever read -- so upstream searches *right to left* for a contiguous
+        run long enough to cover the window, and fills everything before it with the
+        null block. That is why a hybrid model can hit at all: the full-attention
+        groups need the prefix from token zero, the windowed ones need only a window's
+        worth ending at the same place.
+        """
+        from pvllm.v1.kv_cache_interface import SlidingWindowSpec
+
+        assert isinstance(kv_cache_spec, SlidingWindowSpec)
+        block_size = kv_cache_spec.block_size
+        # `window - 1` for the same reason `num_blocks_in_window` uses it: the token
+        # being generated attends to the `window - 1` before it plus itself.
+        needed = -(-(kv_cache_spec.sliding_window - 1) // block_size)
+        max_num_blocks = max_length // block_size
+        null_block = block_pool.null_block
+        assert null_block is not None, (
+            "a sliding-window group needs the reserved null block to stand in for "
+            "the prefix its window no longer attends to (R6.7)"
+        )
+        computed: list[KVCacheBlock] = [null_block] * max_num_blocks
+
+        contiguous = 0
+        for index in range(max_num_blocks - 1, -1, -1):
+            cached = block_pool.get_cached_block(block_hashes[index], group_id=group_id)
+            if cached is None:
+                contiguous = 0
+                continue
+            computed[index] = cached
+            contiguous += 1
+            if contiguous >= needed:
+                # Trim whatever followed the run; the hit ends where it ends.
+                del computed[index + contiguous :]
+                return computed, len(computed) * block_size
+        # No run long enough. Whatever contiguous prefix exists is still a hit.
+        del computed[contiguous:]
+        return computed, len(computed) * block_size
 
     def remove_skipped_blocks(self, request_id: str, num_computed_tokens: int) -> None:
         """Free blocks that have fallen out of the window. R6.7.
