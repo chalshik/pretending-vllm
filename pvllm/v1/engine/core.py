@@ -265,7 +265,6 @@ class EngineCore:
         if connector is None or not metadata:
             return
         seconds = connector.start_load_kv(metadata)
-        seconds += connector.wait_for_save(metadata)
         if seconds > 0.0:
             self.clock.advance(seconds)
 
@@ -322,6 +321,20 @@ class EngineCore:
         engine_core_outputs = self.scheduler.update_from_output(
             scheduler_output, model_output
         )
+
+        # R17.2. Requests that finished in `update_from_output` published their KV,
+        # and the producer's clock pays for those writes here -- inside the step that
+        # issued them. Charged unconditionally rather than only when the step also
+        # had loads: a pure prefill node never loads anything, and gating on the load
+        # metadata meant its writes were modeled, accumulated, and then never spent.
+        # A disaggregated pair whose whole question is "does publishing cost less
+        # than recomputing" answered it with the publish side free.
+        if self.scheduler.connector is not None:
+            saved = self.scheduler.connector.wait_for_save(
+                scheduler_output.kv_connector_metadata
+            )
+            if saved > 0.0:
+                self.clock.advance(saved)
 
         # Stamped here, from the one clock, so a frontend never needs its own.
         timestamp = self.clock.time()

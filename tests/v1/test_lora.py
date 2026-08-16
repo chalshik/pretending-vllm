@@ -105,28 +105,38 @@ def test_the_same_prompt_under_different_adapters_does_not_share_blocks():
     assert keys_none is None
 
 
-def test_two_requests_on_one_adapter_do_share():
-    """The other half: partitioning by adapter must not partition by request, or
-    the cache would never hit for a multi-tenant workload at all."""
+def test_the_adapter_key_is_the_name_upstream_keys_by():
+    """The other half: partitioning by adapter must not partition by request, or the
+    cache would never hit for a multi-tenant workload at all.
+
+    Keyed by the adapter's *name*, which is what upstream hashes. The id would be the
+    more natural identity -- one adapter under two names would then share its cached
+    prefixes -- but upstream treats those as two adapters, and C3 makes hash values
+    part of the contract. A simulator that improves on the engine it stands in for is
+    telling its user something the real engine will not do.
+    """
     from pvllm.v1.core.kv_cache_utils import generate_block_hash_extra_keys
     from pvllm.v1.request import Request
 
-    def request_named(name: str) -> Request:
+    def request_named(request_id: str, lora_name: str, lora_id: int) -> Request:
         return Request(
-            request_id=name,
+            request_id=request_id,
             prompt_token_ids=[1, 2, 3, 4],
             sampling_params=SamplingParams(max_tokens=4),
             arrival_time=0.0,
-            # Same adapter id, different name and path -- one adapter referred to
-            # two ways.
             lora_request=LoRARequest(
-                lora_name=name, lora_int_id=7, lora_path=f"/{name}"
+                lora_name=lora_name, lora_int_id=lora_id, lora_path=f"/{lora_name}"
             ),
         )
 
+    # Two requests, one adapter: they share.
     assert generate_block_hash_extra_keys(
-        request_named("a")
-    ) == generate_block_hash_extra_keys(request_named("b"))
+        request_named("r0", "adapter-a", 7)
+    ) == generate_block_hash_extra_keys(request_named("r1", "adapter-a", 7))
+    # One adapter id under two names: upstream does not share, so neither do we.
+    assert generate_block_hash_extra_keys(
+        request_named("r0", "adapter-a", 7)
+    ) != generate_block_hash_extra_keys(request_named("r1", "adapter-b", 7))
 
 
 def test_a_shared_prefix_hits_within_an_adapter_and_misses_across():

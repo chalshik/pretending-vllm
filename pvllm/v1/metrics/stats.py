@@ -27,6 +27,14 @@ class SchedulerStats:
     #: R14. Cumulative speculative decoding counters. Zero without speculation.
     num_draft_tokens: int = 0
     num_accepted_tokens: int = 0
+    #: R18.1. Encoder cache lookups, in items rather than tokens -- upstream's
+    #: `vllm:mm_cache_*` counts the same way. Zero without multimodal traffic.
+    mm_cache_queries: int = 0
+    mm_cache_hits: int = 0
+    #: R17.2. KV connector lookups, in *tokens*, as upstream's
+    #: `vllm:external_prefix_cache_*` counts. Zero without a connector.
+    external_prefix_cache_queries: int = 0
+    external_prefix_cache_hits: int = 0
 
 
 @dataclass

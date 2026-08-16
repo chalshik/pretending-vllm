@@ -46,13 +46,21 @@ BASE = {
 }
 
 
-def image(index: int, num_tokens: int = 64, position: int = 0) -> MultiModalFeatureSpec:
+def image(
+    index: int,
+    num_tokens: int = 64,
+    position: int = 0,
+    num_embeds: int | None = None,
+) -> MultiModalFeatureSpec:
     return MultiModalFeatureSpec(
         identifier=content_hash(f"http://x/{index}.png"),
         modality="image",
         position=position,
         length=num_tokens,
-        num_embeds=num_tokens,
+        # Embeddings need not equal prompt tokens -- a real projector may emit
+        # more or fewer -- and separating them is what lets a test move the
+        # encoder budget without moving the token budget.
+        num_embeds=num_tokens if num_embeds is None else num_embeds,
     )
 
 
@@ -237,9 +245,10 @@ def test_a_block_before_an_image_is_not_partitioned_by_it():
 
     # A block wholly before the image sees no multimodal key.
     assert generate_block_hash_extra_keys(request, 0, 16) is None
-    # A block overlapping it does.
+    # A block overlapping it does -- carrying the item's offset within the block,
+    # as upstream's key does, so two tilings of the same images cannot collide.
     keys = generate_block_hash_extra_keys(request, 96, 112)
-    assert keys is not None and request.mm_features[0].identifier in keys
+    assert keys == ((request.mm_features[0].identifier, 4),)
 
 
 def test_two_prompts_differing_only_in_an_image_do_not_share_its_blocks():
@@ -335,8 +344,14 @@ def test_an_image_request_completes_end_to_end():
 
 def test_the_encoder_budget_throttles_a_batch_of_images():
     """A separate budget from the token budget, because encoder work and decoder
-    work do not trade against each other. Without it a burst of image requests
-    would all encode in one step, which no real engine does."""
+    work do not trade against each other. Without it a burst of image requests would
+    all encode in one step, which no real engine does.
+
+    Six images of 200 embeddings each, but only 20 prompt tokens apiece: every
+    request fits the 512-token step budget with room to spare, so anything the
+    scheduler holds back it holds back on the *encoder* budget. Two images fit in
+    512 embeddings; the rest wait.
+    """
     engine = LLMEngine.from_engine_args(
         EngineArgs(**{**BASE, "max_num_batched_tokens": 512})
     )
@@ -344,16 +359,18 @@ def test_the_encoder_budget_throttles_a_batch_of_images():
         for index in range(6):
             engine.add_request(
                 f"r{index}",
-                [10] * 10 + [PLACEHOLDER_TOKEN_ID] * 200 + [11] * 5,
+                [10] * 10 + [PLACEHOLDER_TOKEN_ID] * 20 + [11] * 5,
                 SamplingParams(max_tokens=4),
-                mm_features=[image(index, num_tokens=200, position=10)],
+                mm_features=[image(index, num_tokens=20, position=10, num_embeds=200)],
             )
-        engine.step()
-
         scheduler = engine.engine_core.engine_core.scheduler
-        # 512 encoder tokens cannot cover six 200-token images in one step.
-        assert scheduler.encoder_cache_manager.num_free_slots >= 0
-        assert len(scheduler.running) < 6
+        output = scheduler.schedule()
+
+        encoded = sum(len(ids) for ids in output.scheduled_encoder_inputs.values())
+        assert encoded == 512 // 200, output.scheduled_encoder_inputs
+        # The token budget was nowhere near binding, so the encoder budget is the
+        # only thing that could have held the other four back.
+        assert sum(output.num_scheduled_tokens.values()) < 512
     finally:
         engine.shutdown()
 

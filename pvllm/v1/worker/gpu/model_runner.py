@@ -88,6 +88,13 @@ class SimModelRunner:
         self.kv_cache_config: KVCacheConfig | None = None
         self.captured_sizes: frozenset[int] = frozenset()
 
+        #: R18.1. Encoder outputs resident on this device, by mm hash. The scheduler
+        #: decides *whether* to encode and how much room there is; this is what is
+        #: actually being held, and the two must agree -- which is the only way the
+        #: eviction notice in `SchedulerOutput.free_encoder_mm_hashes` means
+        #: anything.
+        self.encoder_outputs: set[str] = set()
+
         #: The most recent step's metadata and cost, for the debug surface (D9).
         self.last_attn_metadata: SimAttentionMetadata | None = None
 
@@ -386,17 +393,25 @@ class SimModelRunner:
             and attn_metadata.num_prefills == 0
         )
 
+        # R18.1. Embeddings the scheduler evicted. Dropped here because the worker is
+        # what holds them: the scheduler's cache manager tracks *slots*, and this
+        # tracks what is actually resident on the device. The notice was carried in
+        # `SchedulerOutput` and read by nobody, so the worker's set only ever grew --
+        # the leak the eviction protocol exists to prevent.
+        for mm_hash in scheduler_output.free_encoder_mm_hashes:
+            self.encoder_outputs.discard(mm_hash)
+
         # R18.1. What the scheduler told us to encode this step. Cached images are
         # absent from `scheduled_encoder_inputs` by construction, so a step that hit
         # the cache costs nothing extra -- which is the effect worth seeing.
         num_encoder_embeds = 0
         for req_id, input_ids in scheduler_output.scheduled_encoder_inputs.items():
             features = self.req_states.mm_features.get(req_id, ())
-            num_encoder_embeds += sum(
-                features[input_id].num_embeds
-                for input_id in input_ids
-                if input_id < len(features)
-            )
+            for input_id in input_ids:
+                if input_id >= len(features):
+                    continue
+                num_encoder_embeds += features[input_id].num_embeds
+                self.encoder_outputs.add(features[input_id].identifier)
 
         return input_batch, StepProfile(
             num_tokens=input_batch.num_tokens,

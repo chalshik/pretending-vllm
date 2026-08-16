@@ -37,6 +37,22 @@
       "engine",
       "model_name"
     ],
+    "name": "vllm:external_prefix_cache_hits",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:external_prefix_cache_queries",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
     "name": "vllm:generation_tokens",
     "type": "counter"
   },
@@ -103,6 +119,22 @@
     ],
     "name": "vllm:kv_cache_usage_perc",
     "type": "gauge"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:mm_cache_hits",
+    "type": "counter"
+  },
+  {
+    "labels": [
+      "engine",
+      "model_name"
+    ],
+    "name": "vllm:mm_cache_queries",
+    "type": "counter"
   },
   {
     "labels": [

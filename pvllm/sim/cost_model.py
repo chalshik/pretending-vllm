@@ -43,13 +43,20 @@ from pvllm.sim.model_db import DTYPE_BYTES, ModelCard
 #: two norms, three MLP matmuls, plus residuals.
 KERNELS_PER_LAYER_EAGER = 12
 #: With a captured graph the whole step is a handful of launches (R8.4).
-#: R18.1. Parameters a vision encoder reads per output embedding, as a multiple of
-#: hidden_size. A rough stand-in for a ViT's per-patch cost -- uncalibrated like every
-#: other constant here (R9.5), and the reason an image shows up as expensive rather
-#: than as exactly its real cost.
-ENCODER_PARAMS_PER_EMBED = 12
-
 KERNELS_PER_STEP_CAPTURED = 8
+
+#: R18.1. Parameters in the vision encoder, at ViT-L/14 scale -- roughly what
+#: LLaVA-1.5 and Qwen-VL pair with a decoder, whatever the decoder's size. A
+#: *count*, not a multiple of `hidden_size`: a vision tower does not grow with the
+#: language model it is bolted to, and the previous form (12 x hidden_size, about
+#: 49k parameters) modeled a 256-patch image at a tenth of a microsecond -- free,
+#: against a 20 ms step. An image was documented as expensive and priced at nothing,
+#: which is the one direction a cost model must not be wrong in when the question is
+#: whether to cache encoder output at all.
+#:
+#: Uncalibrated like every other constant here (R9.5). Read it as "an image costs
+#: roughly one short prefill", not as a measurement.
+ENCODER_PARAMS = 300_000_000
 
 
 @dataclass
@@ -91,6 +98,12 @@ class StepCost:
     jitter_factor: float
     flops: float
     bytes_moved: float
+    #: R18.1. The vision encoder's own pass. Its own field rather than folded into
+    #: `compute_seconds`, because `bound_by` compares compute against memory and an
+    #: encoder term added to the compute side flipped that verdict on any step
+    #: carrying an image -- reporting a memory-bound decode step as compute-bound
+    #: for a reason that has nothing to do with the decode.
+    encoder_seconds: float = 0.0
 
     @property
     def is_compute_bound(self) -> bool:
@@ -102,6 +115,7 @@ class StepCost:
             "compute_s": self.compute_seconds,
             "memory_s": self.memory_seconds,
             "comm_s": self.comm_seconds,
+            "encoder_s": self.encoder_seconds,
             "overhead_s": self.overhead_seconds,
             "jitter": self.jitter_factor,
             "flops": self.flops,
@@ -281,12 +295,7 @@ class RooflineCostModel(CostModel):
         # slow because of an image rather than because of the batch.
         t_encoder = 0.0
         if profile.num_encoder_embeds:
-            encoder_flops = (
-                2.0
-                * ENCODER_PARAMS_PER_EMBED
-                * profile.num_encoder_embeds
-                * self.model.hidden_size
-            )
+            encoder_flops = 2.0 * ENCODER_PARAMS * profile.num_encoder_embeds
             t_encoder = encoder_flops / (self.device.mfu * self.peak_flops)
             flops += encoder_flops
 
@@ -311,7 +320,8 @@ class RooflineCostModel(CostModel):
 
         return StepCost(
             duration=duration,
-            compute_seconds=t_compute + t_encoder,
+            compute_seconds=t_compute,
+            encoder_seconds=t_encoder,
             memory_seconds=t_memory,
             comm_seconds=t_comm,
             overhead_seconds=t_overhead,

@@ -337,14 +337,19 @@ def generate_block_hash_extra_keys(
     silently reading another's KV -- which is why the unimplemented cases raise
     rather than being skipped.
     """
+    # Upstream's order, exactly: LoRA, then multimodal, then the salt. The tuple is
+    # hashed, so the order is part of the value, and C3 makes hash values themselves
+    # part of the contract. An order of our own choosing would have been a second
+    # divergence on top of `compute_none_hash`'s -- and unlike that one, an
+    # unnecessary and undocumented one.
     keys: list[Any] = []
-    if request.cache_salt is not None:
-        keys.append(request.cache_salt)
     if request.lora_request is not None:
-        # R16.1. The id, not the name or the path: it is the adapter's identity, and
-        # two requests referring to one adapter by different names must still share
-        # its cached prefixes.
-        keys.append(request.lora_request.lora_int_id)
+        # R16.1. The adapter's *name*, as upstream keys it. The id would be the more
+        # natural identity -- two names for one adapter would then share its cached
+        # prefixes -- but upstream treats them as distinct, and a simulator that
+        # improves on the engine it stands in for is telling its user something the
+        # real engine will not do.
+        keys.append(request.lora_request.lora_name)
     # R18. Only the images this *block* overlaps, which is what upstream does and
     # matters more than it looks. Folding every one of a request's images into every
     # block's key would partition the text *before* the first image too -- so two
@@ -354,12 +359,26 @@ def generate_block_hash_extra_keys(
     # under-partitioning; it is just wrong in the safe direction.
     if request.mm_features:
         end = end_token_idx if end_token_idx is not None else request.num_tokens
+        # The identifier *and* the item's offset within this block, which is what
+        # upstream appends. The offset is what keeps two different tilings of the
+        # same images apart: blocks of pure placeholder tokens are byte-identical
+        # whatever produced them, so without it a block covering image A's tail and
+        # image B's head hashes the same as one covering a different split of the
+        # same pair -- and the second request reads KV computed for a different
+        # layout. C3 makes hash values themselves part of the contract, so this
+        # matches upstream exactly rather than approximately.
         keys.extend(
-            feature.identifier
+            (feature.identifier, feature.position - start_token_idx)
             for feature in request.mm_features
             if feature.position < end
             and feature.position + feature.length > start_token_idx
         )
+    # Only on the first block, as upstream does. Every later block chains through
+    # block 0's hash, which already carries the salt, so repeating it partitions
+    # nothing further -- it only made every block's hash value differ from
+    # upstream's.
+    if start_token_idx == 0 and request.cache_salt:
+        keys.append(request.cache_salt)
     return tuple(keys) if keys else None
 
 

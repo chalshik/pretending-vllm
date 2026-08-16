@@ -70,7 +70,9 @@ class OpenAIServingChat:
         from pvllm.entrypoints.openai.multimodal import build_multimodal_prompt
 
         token_ids, features = build_multimodal_prompt(
-            request.messages, self.engine.tokenizer
+            request.messages,
+            self.engine.tokenizer,
+            add_generation_prompt=request.add_generation_prompt,
         )
         if token_ids is not None:
             return token_ids, features

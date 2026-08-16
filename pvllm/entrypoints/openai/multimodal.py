@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Any
 
 from pvllm.multimodal.inputs import (
+    MAX_TOKENS_PER_MM_ITEM,
     PLACEHOLDER_TOKEN_ID,
     MultiModalFeatureSpec,
     content_hash,
@@ -31,7 +32,10 @@ from pvllm.multimodal.inputs import (
 #: How many prompt tokens an image occupies. A fixed cost, in the region real
 #: vision-language models land in (LLaVA-1.5 uses 576, Qwen2-VL varies with
 #: resolution). Fixed rather than derived, because deriving it would need the image.
-DEFAULT_IMAGE_TOKENS = 256
+#: It *is* `MAX_TOKENS_PER_MM_ITEM`, which the scheduler's budgets are floored at --
+#: two constants that could drift apart would put the encoder budget below the
+#: largest item and hang every request carrying one.
+DEFAULT_IMAGE_TOKENS = MAX_TOKENS_PER_MM_ITEM
 
 #: Content part types OpenAI defines. `input_audio` and `video_url` are recognized so
 #: the error names them rather than reporting an unknown type.
@@ -108,18 +112,33 @@ def build_multimodal_prompt(
     tokenizer: Any,
     *,
     image_tokens: int = DEFAULT_IMAGE_TOKENS,
+    add_generation_prompt: bool = True,
 ) -> tuple[list[int] | None, list[MultiModalFeatureSpec]]:
     """Token ids with placeholder runs, and the features describing them.
 
     Returns `(None, [])` when no message carries an image, so a text-only chat request
     takes exactly the path it did before multimodal existed -- the placeholder
     machinery costs one check on the common case.
+
+    This has to render *exactly* what the text path renders, token for token, up to
+    the placeholder runs. The text path hands `InputProcessor` a string, which
+    encodes it with `add_special_tokens=True` and so prepends BOS; this path hands
+    over token ids, which the processor passes through untouched. Building them
+    without BOS shifted every token by one position against the identical text
+    rendered without an image -- so block 0 differed, no block was ever shared across
+    the text/image boundary, and a mixed conversation's prefix-cache hit rate came
+    out far below what the same workload gets on real vLLM. That hit rate is the
+    headline number this simulator exists to produce.
     """
     if not _has_image(messages):
         return None, []
 
     token_ids: list[int] = []
     features: list[MultiModalFeatureSpec] = []
+
+    bos = getattr(tokenizer, "bos_token_id", None)
+    if bos is not None:
+        token_ids.append(bos)
 
     for message in messages:
         role = message.get("role", "user")
@@ -154,7 +173,11 @@ def build_multimodal_prompt(
             token_ids.extend(tokenizer.encode(remainder, add_special_tokens=False))
         token_ids.extend(tokenizer.encode("\n", add_special_tokens=False))
 
-    token_ids.extend(tokenizer.encode("<|assistant|>\n", add_special_tokens=False))
+    # Honoured here as it is on the text path, where `apply_chat_template` takes it.
+    # Appending it unconditionally made `add_generation_prompt=False` mean one thing
+    # for a text turn and nothing at all for an image turn.
+    if add_generation_prompt:
+        token_ids.extend(tokenizer.encode("<|assistant|>\n", add_special_tokens=False))
     return token_ids, features
 
 

@@ -60,14 +60,16 @@ logger = init_logger(__name__)
 
 
 def _build_connector(vllm_config: VllmConfig) -> Any:
-    """The scheduler-side KV connector, or `None`. R17.1."""
-    transfer = vllm_config.kv_transfer_config
-    if transfer is None or transfer.kv_connector is None:
-        return None
-    from pvllm.distributed.kv_transfer.base import KVConnectorRole
-    from pvllm.distributed.kv_transfer.sim_connector import SimSharedStoreConnector
+    """The scheduler-side KV connector, or `None`. R17.1.
 
-    return SimSharedStoreConnector(vllm_config, KVConnectorRole.SCHEDULER)
+    Through the platform, which is where upstream's `KVConnectorFactory` sits in the
+    layering: the scheduler asks for the configured connector and never learns which
+    class it got.
+    """
+    from pvllm.distributed.kv_transfer.base import KVConnectorRole
+    from pvllm.platforms import current_platform
+
+    return current_platform.build_kv_connector(vllm_config, KVConnectorRole.SCHEDULER)
 
 
 def _require_block_ids(blocks: KVCacheBlocks) -> tuple[list[int], ...]:
@@ -336,6 +338,16 @@ class Scheduler:
                 else:
                     victim = self.running.pop()
 
+                # R18.1. A preempted request is not in this step's batch, so the
+                # encoder work scheduled for it must come off both the budget and
+                # the step's encoder list. Left in place, the step was charged
+                # vision-encoder time for a request it did not run, and the runner
+                # was told to encode an image for a request with no slot.
+                encoder_budget += self._release_encoder_reservation(
+                    victim,
+                    scheduled_encoder_inputs.get(victim.request_id, []),
+                    scheduled_encoder_inputs,
+                )
                 self._preempt_request(victim)
                 preempted_reqs.append(victim)
 
@@ -345,7 +357,15 @@ class Scheduler:
 
             if new_blocks is None:
                 # Even preempting everything else did not free enough. Stop here
-                # rather than skipping ahead: nothing later will fit either.
+                # rather than skipping ahead: nothing later will fit either -- and
+                # give back this request's own encoder reservation, since it is not
+                # in the batch either. (If it preempted *itself* the rollback above
+                # already ran; releasing an input id twice is a no-op.)
+                encoder_budget += self._release_encoder_reservation(
+                    request,
+                    scheduled_encoder_inputs.get(request.request_id, []),
+                    scheduled_encoder_inputs,
+                )
                 break
 
             scheduled_running_reqs.append(request)
@@ -477,6 +497,21 @@ class Scheduler:
                 if num_new_tokens <= 0:
                     break
 
+                # R18.1. Same encoder budget, same trimming rule -- and *before*
+                # `allocate_slots`, which is where upstream puts it. After it, the
+                # trim happens once blocks are already allocated and
+                # `_cache_full_blocks` has published them: the prefix cache would
+                # then hold blocks for KV this step never computes, and the next
+                # request with the same prefix would hit on them.
+                num_new_tokens, encoder_inputs, encoder_budget = self._schedule_encoder(
+                    request, num_new_tokens, encoder_budget
+                )
+                if num_new_tokens <= 0:
+                    self.waiting.pop_request()
+                    self.skipped_waiting.add_request(request)
+                    self.kv_cache_manager.free(request)
+                    continue
+
                 new_blocks = self.kv_cache_manager.allocate_slots(
                     request,
                     num_new_tokens,
@@ -493,19 +528,16 @@ class Scheduler:
                 )
                 if new_blocks is None:
                     # Does not fit. A later step may have room; leave it at the head
-                    # of the queue so it is tried first.
+                    # of the queue so it is tried first. The encoder references
+                    # taken just above come back with it -- the request is not in
+                    # the batch, so nothing may stay charged to it.
+                    self._release_encoder_reservation(
+                        request, encoder_inputs, scheduled_encoder_inputs
+                    )
+                    encoder_budget += sum(
+                        request.mm_features[i].num_embeds for i in encoder_inputs
+                    )
                     break
-
-                # R18.1. Same encoder budget, same trimming rule, before the
-                # request is committed to the batch.
-                num_new_tokens, encoder_inputs, encoder_budget = self._schedule_encoder(
-                    request, num_new_tokens, encoder_budget
-                )
-                if num_new_tokens <= 0:
-                    self.waiting.pop_request()
-                    self.skipped_waiting.add_request(request)
-                    self.kv_cache_manager.free(request)
-                    continue
                 if encoder_inputs:
                     scheduled_encoder_inputs[request.request_id] = encoder_inputs
 
@@ -783,6 +815,15 @@ class Scheduler:
         # exact failure the window is not allowed to cause.
         for request in still_running:
             self.kv_cache_manager.remove_skipped_blocks(request)
+            # R18.1. And the encoder references the step has finished with. Upstream
+            # frees here for the same reason: the embeddings are only needed while
+            # the placeholder run is being computed, and once it is behind
+            # `num_computed_tokens` they are in the decoder KV cache. Holding them
+            # to the end of the request turned the encoder cache into a per-request
+            # reservation -- a request whose images together exceeded it could never
+            # schedule the second one, and retried forever.
+            if request.mm_features:
+                self._free_encoder_inputs(request)
 
         # R14. The drafts the runner proposed for the *next* step. Stored on the
         # request rather than carried in the output, because whether they are still
@@ -862,7 +903,19 @@ class Scheduler:
         if self.connector is not None:
             blocks = self.kv_cache_manager.get_blocks(request.request_id)
             block_ids = blocks.get_block_ids()
-            self.connector.request_finished(request, block_ids or ())
+            delay_free, _ = self.connector.request_finished(request, block_ids or ())
+            if delay_free:
+                # R17.2. The connector is still reading these blocks -- an async push
+                # that has not landed. Returning them to the pool now would hand a
+                # live read to another request. Discarding this answer meant the
+                # base class's contract could not be honoured by any connector that
+                # needed it, so a real async push could not be modeled at all.
+                raise NotImplementedError(
+                    f"connector {type(self.connector).__name__} asked to hold "
+                    f"request {request.request_id}'s blocks past completion "
+                    f"(asynchronous KV push). Deferred block release is not "
+                    f"implemented; the simulated store writes synchronously."
+                )
 
         # R18.1. Dropped, not evicted: the embeddings stay resident so the next
         # request with the same image still hits.
@@ -922,6 +975,41 @@ class Scheduler:
         record, self.pending_step_record = self.pending_step_record, None
         return record
 
+    def _release_encoder_reservation(
+        self,
+        request: Request,
+        input_ids: list[int],
+        scheduled_encoder_inputs: dict[str, list[int]],
+    ) -> int:
+        """Undo `_schedule_encoder` for a request that did not make the batch.
+
+        Returns the encoder budget to give back.
+        """
+        scheduled_encoder_inputs.pop(request.request_id, None)
+        if not input_ids:
+            return 0
+        given_back = 0
+        for input_id in input_ids:
+            given_back += request.mm_features[input_id].num_embeds
+            self.encoder_cache_manager.free_encoder_input(request, input_id)
+        return given_back
+
+    def _free_encoder_inputs(self, request: Request) -> None:
+        """Drop the encoder references whose placeholders are fully computed. R18.1.
+
+        Upstream's rule, with its drafter look-ahead: an entry stays referenced
+        until the whole item sits behind `num_computed_tokens`, because a chunked
+        prefill can stop inside a placeholder run and the rest of it still needs the
+        embeddings.
+        """
+        held = self.encoder_cache_manager.get_cached_input_ids(request)
+        if not held:
+            return
+        for input_id in list(held):
+            feature = request.mm_features[input_id]
+            if feature.position + feature.length <= request.num_computed_tokens:
+                self.encoder_cache_manager.free_encoder_input(request, input_id)
+
     def _schedule_encoder(
         self, request: Request, num_new_tokens: int, encoder_budget: int
     ) -> tuple[int, list[int], int]:
@@ -957,6 +1045,23 @@ class Scheduler:
                 # chunk. Take a reference; no encoder work and no budget.
                 self.encoder_cache_manager.allocate(request, input_id)
                 continue
+
+            if (
+                feature.num_embeds > self.max_num_encoder_input_tokens
+                or feature.num_embeds > self.encoder_cache_manager.cache_size
+            ):
+                # Unsatisfiable at any budget, so retrying is a livelock rather than
+                # backpressure. `SchedulerConfig` floors both budgets at
+                # `MAX_TOKENS_PER_MM_ITEM` to make this unreachable; it raises
+                # rather than asserting because the alternative -- what shipped --
+                # was a request that hung forever with no error and no log line.
+                raise ValueError(
+                    f"multimodal item {input_id} of request {request.request_id} "
+                    f"needs {feature.num_embeds} encoder embeddings, but the encoder "
+                    f"budget is {self.max_num_encoder_input_tokens} and the cache "
+                    f"holds {self.encoder_cache_manager.cache_size}. It could never "
+                    f"be scheduled."
+                )
 
             if feature.num_embeds > encoder_budget or not (
                 self.encoder_cache_manager.can_allocate(request, input_id)
@@ -1033,6 +1138,18 @@ class Scheduler:
             "num_draft_tokens": self.num_draft_tokens_total,
             "num_accepted_tokens": self.num_accepted_tokens_total,
             "step_index": self.step_index,
+            # R18.1 + R17.2. The two caches either side of the local prefix cache.
+            # Both counted since M4 and reported by nothing until now, so the
+            # features whose whole point is a hit rate had none on the surface a
+            # dashboard reads.
+            "mm_cache_queries": self.encoder_cache_manager.num_queries,
+            "mm_cache_hits": self.encoder_cache_manager.num_hits,
+            "external_prefix_cache_queries": (
+                self.connector.store.num_lookups if self.connector is not None else 0
+            ),
+            "external_prefix_cache_hits": (
+                self.connector.store.num_hits if self.connector is not None else 0
+            ),
         }
         stats.update(self.kv_cache_manager.make_prefix_cache_stats().as_dict())
         return stats

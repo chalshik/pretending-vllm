@@ -45,10 +45,9 @@ class SchedulerConfig:
     scheduler_cls: str | None = None
     async_scheduling: bool = False
 
-    #: Encoder budget (R5.2). Zero until multimodal lands in M4.
     #: R18.1. Encoder tokens one step may process, and how many embeddings stay
-    #: resident. Both default to the token budget, as upstream does: an image that
-    #: cannot fit the step budget could never be scheduled at all.
+    #: resident. Both default to the token budget, floored at the largest single
+    #: multimodal item -- see `__post_init__` for why the floor is not optional.
     max_num_encoder_input_tokens: int = field(init=False, default=0)
     encoder_cache_size: int = field(init=False, default=0)
 
@@ -63,10 +62,23 @@ class SchedulerConfig:
         # R18.1. Sized from the token budget rather than configured separately:
         # upstream does the same, and an encoder budget larger than the step budget
         # would schedule an image whose placeholders cannot fit beside it.
+        #
+        # Floored at the largest item, also as upstream does
+        # (`compute_mm_encoder_budget`). Without the floor an ordinary
+        # `--max-num-batched-tokens 128` sizes the encoder cache below a single
+        # 256-embedding image, and `can_allocate` then answers "no" on every step
+        # for the rest of time: the request is admitted, trimmed to zero tokens,
+        # and retried forever with no error and no log line.
+        from pvllm.multimodal.inputs import MAX_TOKENS_PER_MM_ITEM
+
         if not self.max_num_encoder_input_tokens:
-            self.max_num_encoder_input_tokens = self.max_num_batched_tokens
+            self.max_num_encoder_input_tokens = max(
+                self.max_num_batched_tokens, MAX_TOKENS_PER_MM_ITEM
+            )
         if not self.encoder_cache_size:
-            self.encoder_cache_size = self.max_num_batched_tokens
+            self.encoder_cache_size = max(
+                self.max_num_batched_tokens, MAX_TOKENS_PER_MM_ITEM
+            )
 
         if self.max_num_batched_tokens < 1:
             raise ValueError(

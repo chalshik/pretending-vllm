@@ -16,7 +16,8 @@ See [UPSTREAM.md](UPSTREAM.md).
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, and KV
 > disaggregation all work. Mixed full/windowed models, data and expert
-> parallelism, and real KV transports are not implemented and refuse by name.
+> parallelism, real KV transports, and a KV connector paired with a sliding window are not
+> implemented and refuse by name.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -160,10 +161,11 @@ observable rather than approximated.
 | `--tensor-parallel-size` | shards KV and weights per device; near-linear speedup on prefill, sublinear on decode |
 | `--pipeline-parallel-size` | shards layers per device; **same step latency**, less memory (no microbatch overlap is modeled) |
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |
+| `--lora-modules name=path` | each adapter is served under its own model name: `/v1/models` lists it, and a request naming it routes to it |
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
-| an `image_url` content part | 256 placeholder tokens, a separate encoder budget, and an encoder cache the second request with the same image hits |
-| a KV connector | a second engine pulls a published prefix instead of recomputing it; whether that wins is your store's bandwidth against the cost model's prefill time |
+| an `image_url` content part | 256 placeholder tokens, a separate encoder budget, an encoder pass priced at ViT-L scale, and a cache the second request with the same image hits |
+| a KV connector | a second engine pulls a published prefix instead of recomputing it; both sides pay — the producer for its writes, the consumer for its reads — so `kv_role` and your store's bandwidth decide whether it wins against recomputing |
 | `--enable-lora` + prefix caching | adapter id partitions the cache, so two tenants with the same prompt do not share blocks |
 
 Two of these carry a knob a simulator cannot derive from anything, because it depends on a model

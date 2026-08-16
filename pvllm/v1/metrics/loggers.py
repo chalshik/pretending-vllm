@@ -208,6 +208,29 @@ class PrometheusStatLogger:
             "vllm:prefix_cache_hits",
             "Prefix cache hits, in terms of number of cached tokens.",
         )
+        # R17.2 + R18.1, C6. Upstream's names for the two caches that sit either side
+        # of the local one: the KV connector's cross-instance cache, counted in
+        # tokens, and the multimodal encoder cache, counted in items. Both counters
+        # existed and were reported by nothing, so the two features whose whole point
+        # is a hit rate had no hit rate on the surface a dashboard reads.
+        self.counter_external_prefix_cache_queries = counter(
+            "vllm:external_prefix_cache_queries",
+            "External prefix cache queries from KV connector cross-instance cache "
+            "sharing, in terms of number of queried tokens.",
+        )
+        self.counter_external_prefix_cache_hits = counter(
+            "vllm:external_prefix_cache_hits",
+            "External prefix cache hits from KV connector cross-instance cache "
+            "sharing, in terms of number of cached tokens.",
+        )
+        self.counter_mm_cache_queries = counter(
+            "vllm:mm_cache_queries",
+            "Multi-modal cache queries, in terms of number of queried items.",
+        )
+        self.counter_mm_cache_hits = counter(
+            "vllm:mm_cache_hits",
+            "Multi-modal cache hits, in terms of number of cached items.",
+        )
         # R14. Upstream's names, without the `_total` the client library appends
         # (F5). Acceptance *rate* is deliberately not a gauge: it is a ratio of two
         # counters, and Prometheus computes ratios from counters so a dashboard can
@@ -331,6 +354,18 @@ class PrometheusStatLogger:
             _set_counter(
                 self.counter_prefix_cache_hits, scheduler_stats.prefix_cache_hits
             )
+            _set_counter(
+                self.counter_external_prefix_cache_queries,
+                scheduler_stats.external_prefix_cache_queries,
+            )
+            _set_counter(
+                self.counter_external_prefix_cache_hits,
+                scheduler_stats.external_prefix_cache_hits,
+            )
+            _set_counter(
+                self.counter_mm_cache_queries, scheduler_stats.mm_cache_queries
+            )
+            _set_counter(self.counter_mm_cache_hits, scheduler_stats.mm_cache_hits)
 
         if iteration_stats is None:
             return

@@ -104,6 +104,14 @@ class ServerState:
                 step_index=stats["step_index"],
                 num_draft_tokens=int(stats.get("num_draft_tokens", 0)),
                 num_accepted_tokens=int(stats.get("num_accepted_tokens", 0)),
+                mm_cache_queries=int(stats.get("mm_cache_queries", 0)),
+                mm_cache_hits=int(stats.get("mm_cache_hits", 0)),
+                external_prefix_cache_queries=int(
+                    stats.get("external_prefix_cache_queries", 0)
+                ),
+                external_prefix_cache_hits=int(
+                    stats.get("external_prefix_cache_hits", 0)
+                ),
             ),
             self.engine.take_iteration_stats(),
         )

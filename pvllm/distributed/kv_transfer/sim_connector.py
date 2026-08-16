@@ -54,6 +54,26 @@ class SimSharedStoreConnector(KVConnectorBase):
         super().__init__(vllm_config, role)
         from pvllm.sim.kv_store import get_store
 
+        # R17.1. The store is keyed by block hash, and block hashes only exist when
+        # prefix caching is on -- `Request.block_hashes` is empty otherwise, and so
+        # was every lookup and every publish. The connector became a total no-op
+        # with no warning: a disaggregation experiment ran, reported zero hits, and
+        # looked like a measurement of a store that does not help.
+        cache_config = vllm_config.cache_config
+        if not cache_config.enable_prefix_caching:
+            raise ValueError(
+                "a KV connector requires prefix caching: the store is keyed by block "
+                "hash, and no block hashes are computed with "
+                "--no-enable-prefix-caching. Nothing would be published or matched."
+            )
+        if cache_config.sliding_window is not None:
+            raise NotImplementedError(
+                "a KV connector with sliding-window attention is not implemented. A "
+                "windowed request drops blocks behind its window, so its published "
+                "prefix is not a prefix any consumer can use, and upstream's "
+                "connectors do not model this pairing either."
+            )
+
         transfer = vllm_config.kv_transfer_config
         extra: dict[str, Any] = dict(
             transfer.kv_connector_extra_config if transfer else {}
@@ -64,6 +84,36 @@ class SimSharedStoreConnector(KVConnectorBase):
             latency_seconds=float(extra.get("latency", 0.001)),
             capacity_blocks=extra.get("capacity_blocks"),
         )
+
+        # R17.1. The store is shared by name, and a block hash is over token ids and
+        # extra keys only -- it says nothing about which model computed the KV. Two
+        # engines pointed at one store therefore matched each other's blocks even
+        # with different models, different dtypes, or different tensor-parallel
+        # shardings, and the consumer "hit" on KV of a different shape entirely.
+        # Namespacing the key rather than the hash keeps C3's hash values exactly
+        # upstream's while making the store's identity check the real one.
+        model_config = vllm_config.model_config
+        self._namespace = "|".join(
+            str(part)
+            for part in (
+                model_config.model,
+                model_config.resolved_dtype,
+                vllm_config.cache_config.resolved_cache_dtype,
+                vllm_config.cache_config.block_size,
+                vllm_config.parallel_config.tensor_parallel_size,
+                vllm_config.parallel_config.pipeline_parallel_size,
+            )
+        ).encode()
+
+        # R17.1. `kv_producer` publishes and never pulls; `kv_consumer` pulls and
+        # never publishes; `kv_both` (and an unset role) does both. Validated but
+        # unread before, so a disaggregation experiment ran both halves as `kv_both`
+        # whatever it configured -- and the prefill node reported hits on KV it had
+        # just written itself.
+        role_name = (transfer.kv_role if transfer else None) or "kv_both"
+        self.may_load = role_name in ("kv_consumer", "kv_both")
+        self.may_save = role_name in ("kv_producer", "kv_both")
+
         #: Bytes one block occupies, for costing a transfer. Resolved late, because
         #: the KV layout is not known until the memory model has run.
         self.block_bytes = 0
@@ -74,6 +124,13 @@ class SimSharedStoreConnector(KVConnectorBase):
         #: R17.2. Cumulative modeled transfer time, for the metrics.
         self.load_seconds = 0.0
         self.save_seconds = 0.0
+        #: Modeled write time not yet charged to the clock. Banked here because the
+        #: write is decided on the scheduler side and paid for on the worker side.
+        self._unpaid_save_seconds = 0.0
+
+    def _key(self, block_hash: Any) -> bytes:
+        """The store key for a block hash, namespaced by the model that computed it."""
+        return self._namespace + b"|" + bytes(block_hash)
 
     def set_block_bytes(self, block_bytes: int) -> None:
         """Told by the engine core once the KV layout is resolved."""
@@ -89,7 +146,7 @@ class SimSharedStoreConnector(KVConnectorBase):
         Only blocks *beyond* what the local prefix cache already covers: pulling KV
         the engine has in memory would be strictly worse than using it.
         """
-        if not request.block_hashes or self.block_bytes == 0:
+        if not self.may_load or not request.block_hashes or self.block_bytes == 0:
             return 0, False
 
         local_blocks = num_computed_tokens // self.block_size
@@ -97,7 +154,7 @@ class SimSharedStoreConnector(KVConnectorBase):
         if not remaining:
             return 0, False
 
-        matched_blocks = self.store.longest_prefix([bytes(h) for h in remaining])
+        matched_blocks = self.store.longest_prefix([self._key(h) for h in remaining])
         if matched_blocks == 0:
             return 0, False
 
@@ -127,9 +184,15 @@ class SimSharedStoreConnector(KVConnectorBase):
         block_ids = blocks.get_block_ids()
         if block_ids is None:
             return
+        # From where the local prefix cache left off, not from block 0. `blocks`
+        # is the request's *whole* block table, so slicing from the front named the
+        # locally-cached blocks -- already full of the right KV -- and left the
+        # blocks the store's data was actually meant for unwritten. The request then
+        # read uninitialised KV for the externally-matched span.
+        local_blocks = request.num_computed_tokens // self.block_size
         num_blocks = num_external_tokens // self.block_size
         self._pending_loads[request.request_id] = (
-            list(block_ids[0][:num_blocks]),
+            list(block_ids[0][local_blocks : local_blocks + num_blocks]),
             num_external_tokens,
         )
 
@@ -155,12 +218,30 @@ class SimSharedStoreConnector(KVConnectorBase):
         mechanism behind a prefill node keeping KV until the decode node has pulled
         it -- named here rather than implemented.
         """
-        if not request.block_hashes or self.block_bytes == 0:
+        if not self.may_save or not request.block_hashes or self.block_bytes == 0:
             return False, None
 
-        hashes = [bytes(h) for h in request.block_hashes]
+        # Only blocks whose KV was actually computed. `block_hashes` covers the whole
+        # prompt from the moment the request is built, so publishing it wholesale
+        # meant an aborted request -- or one that never got a single step -- filled
+        # the store with hashes for KV that does not exist. A consumer then "hit" on
+        # them and read uninitialised blocks, and the reported store hit rate counted
+        # a transfer that transferred nothing.
+        computed_blocks = min(
+            request.num_computed_tokens // self.block_size,
+            len(request.block_hashes),
+        )
+        if computed_blocks <= 0:
+            return False, None
+
+        hashes = [self._key(h) for h in request.block_hashes[:computed_blocks]]
         num_bytes = len(hashes) * self.block_bytes
-        self.save_seconds += self.store.write(hashes, num_bytes)
+        seconds = self.store.write(hashes, num_bytes)
+        self.save_seconds += seconds
+        # Banked, not discarded: the producer's clock has to pay for its own writes
+        # or a disaggregated pair looks like it publishes for free, which is the one
+        # number the experiment is trying to weigh against recomputing.
+        self._unpaid_save_seconds += seconds
         return False, None
 
     # --- worker side ---------------------------------------------------------
@@ -175,8 +256,15 @@ class SimSharedStoreConnector(KVConnectorBase):
         return seconds
 
     def wait_for_save(self, metadata: KVConnectorMetadata) -> float:
-        """Writes happen at request completion here, so this has nothing to wait on."""
-        return 0.0
+        """Charge the step for the writes decided since the last one. R17.2.
+
+        The write itself is issued from `request_finished`, on the scheduler side,
+        where there is no clock (R19.1). This is the worker-side moment the step's
+        modeled duration is assembled, so the banked time is paid here -- which is
+        also where a real connector would block on its outstanding pushes.
+        """
+        seconds, self._unpaid_save_seconds = self._unpaid_save_seconds, 0.0
+        return seconds
 
     def __repr__(self) -> str:
         return (

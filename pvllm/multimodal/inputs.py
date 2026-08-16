@@ -23,10 +23,21 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-#: Token ids reserved for placeholders. Above the byte range the mock tokenizer uses
-#: for text, so a placeholder can never be confused for content -- and detokenizing
-#: one produces nothing rather than a stray character.
+#: Token id reserved for placeholders. It sits *below* the mock tokenizer's byte
+#: range (ids 256..511), in the block of special ids no text encodes to, so a
+#: placeholder can never be confused for content. It is not derived from the
+#: tokenizer: a real deployment's placeholder id comes from the model's config, and
+#: this one is fixed so a trace is readable. Detokenizing it yields nothing --
+#: `MockTokenizer.decode` skips ids below its byte offset.
 PLACEHOLDER_TOKEN_ID = 4
+
+#: The largest number of embeddings one multimodal item can produce here. Upstream
+#: derives this per model from the processor and floors both encoder budgets with it
+#: (`compute_mm_encoder_budget`); here every item is an image of fixed size, so the
+#: bound is a constant. It is load-bearing rather than informational: an item larger
+#: than the encoder cache can never be scheduled, and the scheduler's response to
+#: "cannot be scheduled" is to try again next step, forever.
+MAX_TOKENS_PER_MM_ITEM = 256
 
 
 @dataclass(frozen=True)

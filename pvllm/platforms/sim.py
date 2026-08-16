@@ -133,6 +133,31 @@ class SimPlatform(Platform):
         )
 
     @classmethod
+    def build_kv_connector(cls, vllm_config: Any, role: Any) -> Any:
+        """R17.1. Upstream resolves the configured connector class here too.
+
+        The scheduler is Tier A and must not name a simulator module: upstream's
+        `KVConnectorFactory` is the seam it goes through, and this is ours. Without
+        it `v1/core/sched` imported `pvllm.sim` transitively -- a boundary crossing
+        the purity check does not see, because the import is inside a function.
+        """
+        transfer = vllm_config.kv_transfer_config
+        if transfer is None or transfer.kv_connector is None:
+            return None
+        from pvllm.distributed.kv_transfer.sim_connector import SimSharedStoreConnector
+
+        connectors = {"SimSharedStoreConnector": SimSharedStoreConnector}
+        connector_cls = connectors.get(transfer.kv_connector)
+        if connector_cls is None:
+            # `KVTransferConfig` refuses unknown names already; this is the second
+            # gate, so adding a name there without wiring it here fails loudly.
+            raise NotImplementedError(
+                f"KV connector {transfer.kv_connector!r} is accepted by the config "
+                f"but has no implementation here"
+            )
+        return connector_cls(vllm_config, role)
+
+    @classmethod
     def build_trace_sink(
         cls,
         path: str | None,

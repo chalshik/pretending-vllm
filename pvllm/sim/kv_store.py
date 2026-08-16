@@ -132,6 +132,32 @@ def get_store(name: str = "default", **kwargs: float | int | None) -> SimKVStore
     if store is None:
         store = SimKVStore(name=name, **kwargs)  # type: ignore[arg-type]
         _STORES[name] = store
+        return store
+
+    # An existing store keeps the parameters it was built with, and the second
+    # caller's are *reported* rather than dropped. Silently ignoring them made a
+    # sweep over store bandwidth report one flat line: every cell after the first
+    # reused the first cell's store, so the knob under test moved nothing while the
+    # numbers looked like an answer.
+    conflicts = {
+        field: (value, getattr(store, field))
+        for field, value in (
+            ("bandwidth_bytes_per_second", kwargs.get("bandwidth_bytes_per_second")),
+            ("latency_seconds", kwargs.get("latency_seconds")),
+            ("capacity_blocks", kwargs.get("capacity_blocks")),
+        )
+        if value is not None and value != getattr(store, field)
+    }
+    if conflicts:
+        described = ", ".join(
+            f"{field}={asked!r} but the store already has {held!r}"
+            for field, (asked, held) in sorted(conflicts.items())
+        )
+        raise ValueError(
+            f"store {name!r} already exists with different parameters: {described}. "
+            f"Two engines sharing a store must agree about it; to sweep a store "
+            f"parameter, use a distinct store_name per cell or reset between them."
+        )
     return store
 
 
