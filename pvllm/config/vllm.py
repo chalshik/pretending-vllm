@@ -65,9 +65,21 @@ class VllmConfig:
                 self.model_config.max_model_len or 8192
             )
 
+        # B2: the platform gets the last word on the resolved config. This is where
+        # worker_cls stops being "auto".
+        from pvllm.platforms import current_platform
+
+        current_platform.check_and_update_config(self)
+
         # R10.6: a max_model_len whose KV cannot fit even one request is a startup
         # error, not a request-time one. The full check needs the memory model and
         # happens in determine_available_memory; this catches the arithmetic case.
+        #
+        # *After* the platform hook, because the hook is what can move the block
+        # size: a state-space model's alignment takes it from 16 to about 1040, and
+        # reading `block_size` before that meant this warning could never fire for
+        # the only models whose block size grows -- which are exactly the models
+        # whose block size can overtake a reasonable `max_model_len`.
         block_size = self.cache_config.block_size
         if (
             self.model_config.max_model_len
@@ -79,12 +91,6 @@ class VllmConfig:
                 self.model_config.max_model_len,
                 block_size,
             )
-
-        # B2: the platform gets the last word on the resolved config. This is where
-        # worker_cls stops being "auto".
-        from pvllm.platforms import current_platform
-
-        current_platform.check_and_update_config(self)
 
     @property
     def sim_config(self):  # type: ignore[no-untyped-def]

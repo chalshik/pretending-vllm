@@ -112,15 +112,33 @@ class KVCacheCoordinator:
                 del group_blocks[num_blocks:]
         return tuple(blocks or [] for blocks in blocks_by_group), hit_length
 
-    def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
-        """Total new blocks across every group.
+    def get_num_blocks_to_allocate(
+        self,
+        request_id: str,
+        num_tokens: int,
+        new_computed_blocks: tuple[list[KVCacheBlock], ...] | None = None,
+        total_computed_tokens: int = 0,
+    ) -> int:
+        """Total blocks the pool must hand over, across every group.
 
         Summed before any allocation happens so the caller can fail early (R6.5)
         rather than discovering a shortfall partway through.
+
+        The hits go in *per group* and are counted inside each manager rather than
+        subtracted from the total afterwards. Subtracting outside meant flattening
+        them, and the flattening dropped the null placeholders -- which a windowed or
+        state-space group's hit is mostly made of. Those slots are filled by
+        `adopt_cached_blocks` and cost the pool nothing, so charging them refused
+        requests the pool could serve.
         """
+        per_group = new_computed_blocks or ((),) * len(self.single_type_managers)
         return sum(
-            manager.get_num_blocks_to_allocate(request_id, num_tokens)
-            for manager in self.single_type_managers
+            manager.get_num_blocks_to_allocate(
+                request_id, num_tokens, group_blocks, total_computed_tokens
+            )
+            for manager, group_blocks in zip(
+                self.single_type_managers, per_group, strict=True
+            )
         )
 
     def allocate_new_blocks(
@@ -154,11 +172,14 @@ class KVCacheCoordinator:
         return blocks
 
     def remove_skipped_blocks(self, request_id: str, num_computed_tokens: int) -> None:
-        """Fan the window eviction out to every group that has one. R6.7."""
+        """Fan the shed out to every group. R6.7.
+
+        Unconditional now that the base manager implements it: a `getattr` probe
+        meant a group that started shedding got the behaviour only if someone
+        remembered to name the method, and `MambaManager` did not.
+        """
         for manager in self.single_type_managers:
-            remove = getattr(manager, "remove_skipped_blocks", None)
-            if remove is not None:
-                remove(request_id, num_computed_tokens)
+            manager.remove_skipped_blocks(request_id, num_computed_tokens)
 
     def free(self, request_id: str) -> None:
         """Release a request's blocks in every group, tail first (R6.6)."""

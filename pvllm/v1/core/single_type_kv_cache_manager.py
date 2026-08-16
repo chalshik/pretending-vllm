@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Any
 
 from pvllm.v1.core.block_pool import BlockPool
@@ -57,15 +58,127 @@ class SingleTypeKVCacheManager(ABC):
         """
         raise NotImplementedError
 
-    @abstractmethod
-    def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
-        """How many *new* blocks holding `num_tokens` would need."""
+    def get_num_blocks_to_allocate(
+        self,
+        request_id: str,
+        num_tokens: int,
+        new_computed_blocks: Sequence[KVCacheBlock] = (),
+        total_computed_tokens: int = 0,
+    ) -> int:
+        """Blocks the pool must hand over for this request to hold `num_tokens`.
+
+        Ported from upstream's `SingleTypeKVCacheManager.get_num_blocks_to_allocate`
+        rather than derived, because the two things it does beyond the obvious
+        subtraction are exactly the two that are wrong when you derive it.
+
+        First, `new_computed_blocks` counts in *full*, null placeholders included. A
+        windowed or state-space group's cache hit is mostly the shared null block,
+        and `adopt_cached_blocks` installs the whole list -- so those slots are
+        already filled and `allocate_new_blocks` will not ask for them. Charging them
+        was a silent hang: a request whose prefix *hit* could be refused forever on a
+        pool that was entirely free, which is the failure a cache hit should be least
+        able to cause.
+
+        Second, `num_skipped_blocks` discounts the head a group no longer reads --
+        the prefix outside a window, every state but the newest. Without it a group
+        that sheds blocks is still charged for the ones it shed.
+
+        `total_computed_tokens` is the prefix length after this step's hits are
+        counted; it is what decides how much of the head is skipped.
+        """
+        block_size = self.block_size
+        num_required_blocks = -(-num_tokens // block_size)
+        # `.get`, not `[...]`. `req_to_blocks` is a defaultdict, so indexing it here
+        # would *insert* an empty entry for a request that is merely being considered
+        # -- and `allocate_slots` calls this before deciding whether the request
+        # fits. Every failed admission would leave a phantom holder behind, and
+        # `get_num_common_prefix_blocks` counts holders, so the common-prefix count
+        # would collapse to zero for the rest of the run. Upstream reads it the same
+        # non-mutating way, for the same reason.
+        num_req_blocks = len(self.req_to_blocks.get(request_id, ()))
+
+        num_skipped_blocks = (
+            self.get_num_skipped_tokens(total_computed_tokens) // block_size
+        )
+        num_local_computed_blocks = len(new_computed_blocks) + num_req_blocks
+        num_new_blocks = max(
+            num_required_blocks - max(num_skipped_blocks, num_local_computed_blocks), 0
+        )
+
+        # A cached block with no other holder is *in* the free queue, and `touch`
+        # takes it out. So it draws on the same free pool the new blocks do, and
+        # counting it as still available would let an allocation pass the check and
+        # then run the queue dry partway through -- a crash rather than the `None`
+        # the scheduler knows how to handle. The ones the head skips are not touched
+        # and so are not charged.
+        num_skipped_new_computed = max(0, num_skipped_blocks - num_req_blocks)
+        num_evictable_blocks = sum(
+            1
+            for block in new_computed_blocks[num_skipped_new_computed:]
+            if block.ref_cnt == 0 and not block.is_null
+        )
+        return num_new_blocks + num_evictable_blocks
 
     @abstractmethod
     def allocate_new_blocks(
         self, request_id: str, num_tokens: int
     ) -> list[KVCacheBlock]:
         """Allocate and record the new blocks. Returns only the newly added ones."""
+
+    def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
+        """How much of the computed prefix this group no longer reads.
+
+        Zero for full attention, which is what makes its accounting the simple case:
+        every token it ever computed is still attended to. A window skips everything
+        older than itself; a recurrent state skips everything but the last token.
+        `remove_skipped_blocks` and `get_num_blocks_to_allocate` are both written
+        against this one number, so a new group type gets both behaviours by
+        answering it.
+        """
+        return 0
+
+    def remove_skipped_blocks(self, request_id: str, num_computed_tokens: int) -> None:
+        """Free the head this group no longer reads, replacing it with the null block.
+
+        A no-op wherever `get_num_skipped_tokens` returns 0, which is why full
+        attention pays nothing for it. For the groups that do shed, it is the whole
+        mechanism: without it a long-running request holds every block it ever
+        touched, and the bounded-KV property that makes windows and recurrent states
+        worth having would not exist.
+
+        The table keeps its length -- freed slots become the null block rather than
+        disappearing -- because positions index into it.
+        """
+        num_skipped_tokens = self.get_num_skipped_tokens(num_computed_tokens)
+        if num_skipped_tokens <= 0:
+            return
+        blocks = self.req_to_blocks.get(request_id)
+        if not blocks:
+            return
+
+        null_block = self.block_pool.null_block
+        assert null_block is not None, (
+            f"{type(self).__name__} sheds blocks and so needs the pool's null block; "
+            f"BlockPool must be constructed with reserve_null_block=True"
+        )
+
+        num_skipped_blocks = min(num_skipped_tokens // self.block_size, len(blocks))
+        removed: list[KVCacheBlock] = []
+        for index in range(num_skipped_blocks):
+            block = blocks[index]
+            if block is null_block:
+                # Released on an earlier step. Skipped, *not* broken on: nulls
+                # accumulate from index 0 upward, so stopping at the first one would
+                # mean nothing is ever evicted after the first eviction -- the bound
+                # would hold for one step and then quietly stop holding.
+                continue
+            removed.append(block)
+            blocks[index] = null_block
+
+        if removed:
+            # Reversed, like every other free path (R6.6): the most recently
+            # allocated of the dead blocks goes back to the front of the queue.
+            self.block_pool.free_blocks(reversed(removed))
 
     def get_blocks(self, request_id: str) -> list[KVCacheBlock]:
         return self.req_to_blocks.get(request_id, [])
@@ -117,18 +230,6 @@ class FullAttentionManager(SingleTypeKVCacheManager):
     Sliding-window and state-space variants can drop blocks that fall out of scope;
     this one never can, which is what makes its accounting the simple case.
     """
-
-    def get_num_blocks_to_allocate(self, request_id: str, num_tokens: int) -> int:
-        num_required = (num_tokens + self.block_size - 1) // self.block_size
-        # `.get`, not `[...]`. `req_to_blocks` is a defaultdict, so indexing it here
-        # would *insert* an empty entry for a request that is merely being considered
-        # -- and `allocate_slots` calls this before deciding whether the request
-        # fits. Every failed admission would leave a phantom holder behind, and
-        # `get_num_common_prefix_blocks` counts holders, so the common-prefix count
-        # would collapse to zero for the rest of the run. Upstream reads it the same
-        # non-mutating way, for the same reason.
-        num_held = len(self.req_to_blocks.get(request_id, ()))
-        return max(0, num_required - num_held)
 
     def allocate_new_blocks(
         self, request_id: str, num_tokens: int
@@ -207,10 +308,12 @@ class SlidingWindowManager(FullAttentionManager):
     that reported the full-attention number for a windowed model would overstate its
     memory by the ratio of context to window -- 32x on a 128k model with a 4k window.
 
-    **Prefix caching is disabled for windowed groups**, as upstream does: a cached
-    block is only reusable if the whole prefix leading to it is still attended to,
-    and inside a window it usually is not. Reusing one would hand a request KV for
-    tokens the model can no longer see.
+    A windowed group *does* cache -- this paragraph used to say the opposite, and it
+    outlived the change that made it wrong. What it caches is not a prefix but the
+    tail its window still attends to, which is why `find_longest_cache_hit` searches
+    right to left and fills everything before the run with the null block. Refusing
+    to cache would have been the simple answer and it cost a hybrid model its whole
+    hit rate, because the coordinator reconciles across every group.
     """
 
     def __init__(self, kv_cache_spec: KVCacheSpec, *args: Any, **kwargs: Any) -> None:
@@ -278,44 +381,14 @@ class SlidingWindowManager(FullAttentionManager):
         del computed[contiguous:]
         return computed, len(computed) * block_size
 
-    def remove_skipped_blocks(self, request_id: str, num_computed_tokens: int) -> None:
-        """Free blocks that have fallen out of the window. R6.7.
+    def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
+        """Everything older than the window. R6.7.
 
-        Called after each step's allocation, so a long-running request returns
-        capacity as it goes rather than holding everything until it finishes -- which
-        is the entire point of a window.
+        The base `remove_skipped_blocks` floors this to a block boundary, so the
+        first block still needed is `max(0, n - window) // block_size` -- which is
+        what this used to compute inline, and is unchanged by moving it here.
         """
-        blocks = self.req_to_blocks.get(request_id)
-        if not blocks:
-            return
-
-        # The first token still attended to, and therefore the first block still
-        # needed. Everything before it is dead.
-        first_live_token = max(0, num_computed_tokens - self.sliding_window)
-        first_live_block = first_live_token // self.block_size
-
-        null_block = self.block_pool.null_block
-        assert null_block is not None, (
-            "a sliding-window group needs the pool's null block; BlockPool must be "
-            "constructed with reserve_null_block=True"
-        )
-
-        removed: list[KVCacheBlock] = []
-        for index in range(min(first_live_block, len(blocks))):
-            block = blocks[index]
-            if block is null_block:
-                # Released on an earlier step. Skipped, *not* broken on: nulls
-                # accumulate from index 0 upward, so stopping at the first one would
-                # mean nothing is ever evicted after the first eviction -- the bound
-                # would hold for one step and then quietly stop holding.
-                continue
-            removed.append(block)
-            blocks[index] = null_block
-
-        if removed:
-            # Reversed, like every other free path (R6.6): the most recently
-            # allocated of the dead blocks goes back to the front of the queue.
-            self.block_pool.free_blocks(reversed(removed))
+        return max(0, num_computed_tokens - self.sliding_window)
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
         """Zero, always.
@@ -331,11 +404,17 @@ class SlidingWindowManager(FullAttentionManager):
 class MambaManager(FullAttentionManager):
     """Blocks for a state-space group. R6.7.
 
-    Block *accounting* is full attention's: with the block size aligned so an
-    attention page covers one state, a request holds `ceil(tokens / block_size)`
-    blocks and each of them is a snapshot of the recurrent state at that boundary.
-    What differs is the cache hit, and it differs in a way that is easy to get
-    catastrophically wrong.
+    A recurrent state is *one* page, not a page per block boundary. The block table
+    still has an entry per boundary -- positions index into it -- but every entry
+    below the newest is the null block, so what a request actually holds is a single
+    live state however long its context runs. That is the entire capacity argument
+    for a state-space layer, and getting it wrong charges a Mamba group as if it were
+    linear in context, which is the shape it exists not to have.
+
+    Two things make that true, and both are answers to questions the base class asks:
+    `get_num_skipped_tokens` (everything but the last token) and, through it,
+    `remove_skipped_blocks` and `get_num_blocks_to_allocate`. The third,
+    `find_longest_cache_hit`, differs for a reason of its own.
     """
 
     @classmethod
@@ -377,6 +456,24 @@ class MambaManager(FullAttentionManager):
             if cached is not None:
                 return [null_block] * index + [cached], (index + 1) * block_size
         return [], 0
+
+    def get_num_skipped_tokens(self, num_computed_tokens: int) -> int:
+        """All but the last computed token. R6.7.
+
+        Upstream says it in one line -- "Mamba only need to keep the state of the
+        last computed token" -- and the consequence is the whole point of the layer:
+        the state at position N already summarises every token before it, so the
+        snapshots taken at earlier boundaries are dead the moment a newer one exists.
+
+        Inheriting full attention's zero here was the defect this replaces. It left
+        a request holding `ceil(tokens / block_size)` state pages instead of one, so
+        a 4 MiB-per-page state-space group was charged 8x its true cost at 8k context
+        and grew from there -- and the model card, the README and the commit message
+        all said the opposite. Blocks below the newest are still *freed*, not
+        forgotten: they keep their hash and stay in the free queue, so a later
+        request can still resume from a snapshot they hold.
+        """
+        return num_computed_tokens - 1
 
     def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
         """Zero. A recurrent state is per request; there is no shared prefix to

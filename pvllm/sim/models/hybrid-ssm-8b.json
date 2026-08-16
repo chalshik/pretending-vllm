@@ -11,12 +11,12 @@
   "dtype": "bfloat16",
   "architecture": "NemotronHForCausalLM",
   "tie_word_embeddings": false,
-  "hybrid_override_pattern": "MMMMMMMMMMMMMMMMMMMMMMMM****------------------------",
+  "hybrid_override_pattern": "M-M-M-M*-M-M-M-M-M*-M-M-M-M-M*-M-M-M-M-M*-M-M-M-M-M-",
   "mamba_num_heads": 128,
   "mamba_head_dim": 64,
   "mamba_state_size": 128,
   "mamba_n_groups": 8,
   "mamba_conv_kernel": 4,
   "mamba_ssm_cache_dtype": "float32",
-  "provenance": "Representative of an attention/state-space hybrid (Nemotron-H-8B class): 24 Mamba layers, 4 attention, 24 MLP. Dimensions approximate that architecture family, not a verified checkpoint config. Present because a recurrent state is constant per request while KV is linear in context -- the two are equal at about 6,200 tokens here -- and because the fixed state forces the attention block size up, which moves block counts and every block hash value."
+  "provenance": "Representative of an attention/state-space hybrid (Nemotron-H-8B class): 24 Mamba layers, 4 attention, 24 MLP. Every dimension and the layer pattern are copied from Nemotron-H's published config (transformers_utils/configs/nemotron_h.py at the pin), not approximated; the attention layers are interleaved at indices 7, 18, 29 and 40 rather than grouped, which is what makes pipeline parallelism give every stage some of each. Not a verified checkpoint config. Present because a recurrent state is constant per request while KV is linear in context -- the two are equal at about 6,200 tokens here -- and because the fixed state forces the attention block size up, which moves block counts and every block hash value."
 }

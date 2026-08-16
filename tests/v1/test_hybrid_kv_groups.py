@@ -205,10 +205,17 @@ def test_a_hybrid_request_is_charged_for_every_group_it_holds():
     # everything it scheduled, so one step's token budget is resident alongside the
     # window. R10.6's guard compares against this, and under-counting it let a config
     # start and then livelock -- see `windowed_blocks_for_one_request`.
-    from pvllm.sim.memory import windowed_blocks_for_one_request
-
-    windowed = windowed_blocks_for_one_request(1024, 16, 4096, 512)
+    #
+    # Spelled out rather than obtained by calling `windowed_blocks_for_one_request`
+    # here. Calling it asserted only that the profile agrees with the helper the
+    # profile itself calls, which holds for any helper -- including the one whose
+    # under-count shipped a hang. These constants are the derivation: a 1024-token
+    # window plus a 512-token step budget spans 1023 + 512 = 1535 tokens, which is 96
+    # blocks of 16, and one more for the window straddling a block boundary.
+    windowed = -(-(1024 - 1 + 512) // 16) + 1
+    assert windowed == 97
     expected_blocks_per_request = 5 * windowed + 4096 // 16
+    assert expected_blocks_per_request == 741
     assert profile.max_concurrency == pytest.approx(
         (profile.num_gpu_blocks - 1) / expected_blocks_per_request, rel=1e-6
     )

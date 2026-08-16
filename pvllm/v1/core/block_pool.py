@@ -240,6 +240,16 @@ class BlockPool:
             block = blocks[i]
             if block.block_hash is not None:
                 continue
+            if block.is_null:
+                # R6.7. The null block is a *placeholder* for content this group did
+                # not keep -- the prefix outside a window, a state snapshot older
+                # than the newest. Hashing it would publish block 0 under a real
+                # content key, and because it is pinned it can never be evicted, so
+                # the entry outlives every genuine block holding that content:
+                # `get_cached_block` would then hand a later request the shared
+                # placeholder as if it were its KV. C3 calls the hash-to-block map
+                # exact, and this is the one way to make it permanently wrong.
+                continue
             key = make_block_hash_with_group_id(request_block_hashes[i], group_id)
             block.set_block_hash(key)
             self.cached_block_hash_to_block.setdefault(key, {})[block.block_id] = block

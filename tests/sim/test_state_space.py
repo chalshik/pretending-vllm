@@ -101,11 +101,6 @@ def test_a_state_space_group_reports_a_snapshot_not_nothing():
     zero drives the reconciled length to zero and throws away the attention groups'
     hits. A hybrid model's prefix cache hit rate would read exactly 0.0, and C3 calls
     that rate exact."""
-    from pvllm.v1.core.single_type_kv_cache_manager import MambaManager
-
-    source = MambaManager.find_longest_cache_hit.__doc__ or ""
-    assert "snapshot" in source
-
     llm = LLM(**BASE, enable_prefix_caching=True)
     try:
         manager = llm.llm_engine.engine_core.engine_core.scheduler.kv_cache_manager
@@ -115,11 +110,18 @@ def test_a_state_space_group_reports_a_snapshot_not_nothing():
         prompt = "a shared preamble " * 200
         llm.generate([prompt + f"q{i}" for i in range(3)], SamplingParams(max_tokens=8))
         stats = llm.llm_engine.make_stats()
-        # Whatever the rate, the reconciliation must not have collapsed to zero
-        # *queries* -- the attention group is still asked.
-        assert stats["prefix_cache_queries"] > 0
     finally:
         llm.shutdown()
+
+    # The *hits*, not the queries. Queries are counted before any group is consulted,
+    # so they are bit-identical whether the state-space group answers with a snapshot
+    # or with nothing -- which is exactly why asserting on them let the trap through.
+    # The reconciled length is the min across groups, so a group returning `([], 0)`
+    # drags the whole rate to 0.0 while every other number in this test stays put.
+    assert stats["prefix_cache_queries"] > 0
+    assert stats["prefix_cache_hits"] > 0
+    hit_rate = stats["prefix_cache_hits"] / stats["prefix_cache_queries"]
+    assert hit_rate > 0.4, hit_rate
 
 
 def test_a_hybrid_state_space_model_serves():

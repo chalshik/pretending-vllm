@@ -74,6 +74,13 @@ class MambaSpec(KVCacheSpec):
     which changes block counts, prefix-cache granularity and every block hash value,
     so it lands on C2 and C3 far harder than the state bytes land on the memory model.
     `page_size_padded` carries the result of that reconciliation.
+
+    A page not scaling with `block_size` is only half the claim, and for a while it
+    was the only half that was true: the *number* of pages a request holds must also
+    not scale with context, and that is `MambaManager`'s job, not this class's. It
+    keeps one live state and nulls the rest, following upstream's default
+    `mamba_cache_mode="none"`. Without that, a spec whose page is constant was held
+    `ceil(context / block_size)` times and the constant bought nothing.
     """
 
     #: Bytes of recurrent state one layer holds for one request, before padding.
@@ -140,6 +147,31 @@ class SlidingWindowSpec(AttentionSpec):
         # The window is part of the identity: two layers with different windows
         # cannot share a block table, because they free blocks at different points.
         return f"{super().type_id}_sw{self.sliding_window}"
+
+
+@dataclass(frozen=True)
+class SlidingWindowMLASpec(SlidingWindowSpec):
+    """A windowed layer whose cache is a compressed latent. R6.7.
+
+    Upstream carries the same pair -- `MLAAttentionSpec` beside `SlidingWindowSpec`,
+    and `SlidingWindowMLASpec` for the overlap -- and the reason it needs a fourth
+    class rather than a flag is that the two properties are on different axes:
+    windowing decides *how many* pages a request holds, MLA decides *how big* one is.
+
+    Without this, asking an MLA model what it would cost with a window silently
+    answered as an ordinary multi-head model: 16 KV heads of 128 instead of one
+    latent of 576, a page 7.1x too large, and a `num_gpu_blocks` and
+    `max_concurrency` wrong by that factor in the direction that makes a window look
+    like it *costs* capacity. It also reintroduced TP sharding to a cache that does
+    not shard, so the same model reported a different per-token KV size at every
+    tensor-parallel size.
+    """
+
+    @property
+    def page_size_bytes(self) -> int:
+        # One latent per token, not a key and a value -- the same single factor of
+        # two `MLAAttentionSpec` drops, for the same reason.
+        return self.block_size * self.num_kv_heads * self.head_size * self.dtype_bytes
 
 
 @dataclass

@@ -24,8 +24,10 @@ from typing import Any
 
 import numpy as np
 
+from pvllm import envs
 from pvllm.config import VllmConfig
 from pvllm.logger import init_logger
+from pvllm.platforms import current_platform
 from pvllm.sim.cost_model import StepCost, StepProfile
 from pvllm.sim.device import SimDevice
 from pvllm.sim.model import SimModel
@@ -33,7 +35,7 @@ from pvllm.v1.attention.backends.sim_attn import SimAttentionMetadata
 from pvllm.v1.core.sched.output import SchedulerOutput
 from pvllm.v1.kv_cache_interface import KVCacheConfig, SlidingWindowSpec
 from pvllm.v1.outputs import LogprobsLists, ModelRunnerOutput
-from pvllm.v1.worker.gpu.attn_utils import build_attn_metadata
+from pvllm.v1.worker.gpu.attn_utils import build_attn_metadata, resolve_model_card
 from pvllm.v1.worker.gpu.block_table import BlockTables
 from pvllm.v1.worker.gpu.input_batch import InputBatch, sort_batch_req_ids
 from pvllm.v1.worker.gpu.states import RequestState
@@ -77,6 +79,24 @@ class SimModelRunner:
         )
         # A verified step's query is 1 + the drafts it carried.
         self.decode_query_len = 1 + self.num_spec_tokens
+
+        # B2. Resolved through the platform, exactly as upstream's
+        # `v1/attention/selector.py` does, rather than imported directly. Not
+        # ceremony: the hook is where `--attention-backend`/`PVLLM_ATTENTION_BACKEND`
+        # is refused by name, and while nothing called it the refusal was inert --
+        # a backend this simulator cannot model was accepted in silence. It is also
+        # the layer that gets told `use_mla`, so a platform that cannot serve MLA
+        # says so here rather than producing a plausible wrong page size.
+        card = resolve_model_card(vllm_config)
+        self.attn_backend_cls = current_platform.get_attn_backend_cls(
+            selected_backend=envs.PVLLM_ATTENTION_BACKEND,
+            head_size=model_config.get_head_size(),
+            dtype=model_config.resolved_dtype,
+            kv_cache_dtype=vllm_config.cache_config.resolved_cache_dtype,
+            block_size=self.block_size,
+            use_mla=bool(card is not None and card.use_mla),
+            has_sink=False,
+        )
 
         self.req_states = RequestState(
             max_num_reqs=self.max_num_reqs,

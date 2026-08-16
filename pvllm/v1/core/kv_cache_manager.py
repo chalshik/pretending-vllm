@@ -107,10 +107,15 @@ class KVCacheManager:
         # window for the prefix it no longer attends to, a state-space group for the
         # boundaries it did not snapshot. Reserving the null block only for windows
         # left a Mamba group asserting for one that was never created.
-        needs_null_block = self.has_sliding_window or any(
+        #
+        # The same set is exactly the set that sheds blocks as a request runs, which
+        # is what `remove_skipped_blocks` gates on -- so it is derived once here
+        # rather than asked twice with two different answers.
+        self.has_skipping_groups = self.has_sliding_window or any(
             type(group.kv_cache_spec).__name__ == "MambaSpec"
             for group in kv_cache_config.kv_cache_groups
         )
+        needs_null_block = self.has_skipping_groups
 
         self.block_pool = BlockPool(
             kv_cache_config.num_blocks,
@@ -160,9 +165,10 @@ class KVCacheManager:
 
         **At least one token is always recomputed.** A request whose every block is
         cached would otherwise be scheduled with zero new tokens -- nothing to run,
-        no logits, no sampled token, and it would never progress. The rule only bites
-        on an exact full-prompt hit, which makes it the easiest thing here to get
-        wrong and not notice.
+        no logits, no sampled token, and it would never progress. It is enforced by
+        capping the search at `num_tokens - 1`, not by trimming the answer: for full
+        attention the two are arithmetically the same, and for a group whose hit is
+        not a prefix only one of them is correct.
         """
         if not self.enable_caching or request.num_computed_tokens > 0:
             return self._empty_blocks, 0
@@ -175,17 +181,19 @@ class KVCacheManager:
         # that was never written. Turning caching off pool-wide whenever any group
         # slid was the older answer -- simple, and it cost a hybrid model its whole
         # hit rate where upstream keeps the full-attention groups cached.
+        # At least one token is always recomputed, and the cap goes in *before* the
+        # lookup rather than trimming the result after. Upstream does it here for a
+        # reason that only shows up on a group whose hit is not a prefix: trimming
+        # afterwards means a prefix slice, and a state-space group's hit is
+        # `[null, ..., null, state]` -- the one meaningful block is the *last*
+        # element, so the slice kept the placeholders and threw away the state while
+        # still telling the request those tokens were computed. Capping the search
+        # length instead makes every group return something it can actually serve.
+        # For full attention the two are arithmetically identical, which is why the
+        # C3 hash values and hit rates for dense models do not move.
         per_group, num_computed_tokens = self.coordinator.find_longest_cache_hit(
-            list(request.block_hashes), request.num_tokens
+            list(request.block_hashes), max(0, request.num_tokens - 1)
         )
-
-        if num_computed_tokens == request.num_tokens:
-            # At least one token is always recomputed. A request whose every block is
-            # cached would otherwise be scheduled with zero new tokens -- nothing to
-            # run, no logits, no sampled token -- and would never progress.
-            num_computed_tokens -= self.block_size
-            trimmed = -(-num_computed_tokens // self.block_size)
-            per_group = tuple(list(blocks[:trimmed]) for blocks in per_group)
 
         self.prefix_cache_stats.hits += num_computed_tokens
         if num_computed_tokens <= 0:
@@ -236,8 +244,8 @@ class KVCacheManager:
             if new_computed_blocks is not None and new_computed_blocks.num_blocks
             else tuple([] for _ in range(self.num_kv_cache_groups))
         )
-        # Flattened only for the *pool* arithmetic below, which counts physical
-        # blocks. The null block is shared and pinned, so it is never one of them.
+        # Flattened only for `touch`, which takes physical blocks out of the free
+        # queue. The null block is shared and pinned, so it is never one of them.
         cached_blocks = [
             block
             for group_blocks in per_group_cached
@@ -245,22 +253,20 @@ class KVCacheManager:
             if not block.is_null
         ]
 
+        # Counted per group, inside the managers. Flattening first and subtracting
+        # the total here dropped the null placeholders that make up most of a
+        # windowed or state-space hit, and charged the pool for slots
+        # `adopt_cached_blocks` was about to fill for free -- so a request whose
+        # prefix *hit* could be refused forever on an idle pool.
         num_blocks_to_allocate = self.coordinator.get_num_blocks_to_allocate(
-            request.request_id, num_tokens_needing_slots
-        ) - len(cached_blocks)
-
-        # A cached block with no other holder is *in* the free queue, and `touch`
-        # takes it out. So it draws on the same free pool the new blocks do, and
-        # counting it as still available would let an allocation pass the check and
-        # then run the queue dry partway through -- which is a crash rather than the
-        # `None` the scheduler knows how to handle.
-        num_free_cached_blocks = sum(1 for block in cached_blocks if block.ref_cnt == 0)
+            request.request_id,
+            num_tokens_needing_slots,
+            per_group_cached,
+            num_computed_tokens,
+        )
 
         # Fail early, before anything is mutated (R6.5).
-        if (
-            num_blocks_to_allocate + num_free_cached_blocks
-            > self.block_pool.get_num_free_blocks()
-        ):
+        if num_blocks_to_allocate > self.block_pool.get_num_free_blocks():
             return None
 
         if cached_blocks:
@@ -295,7 +301,16 @@ class KVCacheManager:
         ):
             if not blocks:
                 continue
-            num_already_cached = sum(1 for b in blocks if b.block_hash is not None)
+            # The length of the leading run already dealt with, not a *count* of
+            # hashed blocks. For a group whose table starts with null placeholders
+            # the two differ, and the count made the loop start early enough to
+            # reach a null and try to hash it. Nulls end the run's excuse but not the
+            # run: they are skipped here and refused again in `cache_full_blocks`.
+            num_already_cached = 0
+            for block in blocks:
+                if block.block_hash is None and not block.is_null:
+                    break
+                num_already_cached += 1
             self.block_pool.cache_full_blocks(
                 list(request.block_hashes),
                 list(blocks),
@@ -307,14 +322,20 @@ class KVCacheManager:
     # --- release -------------------------------------------------------------
 
     def remove_skipped_blocks(self, request: Request) -> None:
-        """Release blocks that have fallen out of a sliding window. R6.7.
+        """Release blocks the model no longer reads. R6.7.
 
         A no-op for a full-attention model, which is why it costs one flag check on
-        the common path. For a windowed one it is the whole mechanism: without it a
-        long conversation holds every block it ever touched, and the bounded-KV
-        property that makes windows worth having would not exist.
+        the common path. For a group that sheds -- a window, or a recurrent state --
+        it is the whole mechanism: without it a long conversation holds every block
+        it ever touched, and the bounded-KV property that makes those layers worth
+        having would not exist.
+
+        The flag covers *every* shedding group. Gating on windows alone left a
+        state-space group holding a snapshot per block boundary for the life of the
+        request, so its memory grew linearly with context -- the one shape a
+        recurrent state exists not to have.
         """
-        if not self.has_sliding_window:
+        if not self.has_skipping_groups:
             return
         self.coordinator.remove_skipped_blocks(
             request.request_id, request.num_computed_tokens

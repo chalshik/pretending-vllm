@@ -78,6 +78,8 @@ def test_a_window_raises_concurrency_in_proportion():
     """The headline effect, and the reason this is modeled rather than approximated.
     Concurrency is bounded by tokens-per-request, and a window is what sets it."""
 
+    pool: list[int] = []
+
     def concurrency(window: int | None) -> float:
         engine = LLM(
             model="dense-8b",
@@ -90,6 +92,7 @@ def test_a_window_raises_concurrency_in_proportion():
         try:
             profile = engine.llm_engine.engine_core.engine_core.executor.driver_worker.memory_profile
             assert profile is not None
+            pool.append(profile.num_gpu_blocks)
             return profile.max_concurrency
         finally:
             engine.shutdown()
@@ -97,16 +100,32 @@ def test_a_window_raises_concurrency_in_proportion():
     full = concurrency(None)
     wide = concurrency(4096)
     narrow = concurrency(1024)
+    # A window changes what a request holds, not how big the pool is.
+    assert len(set(pool)) == 1
+    blocks = pool[0]
 
     # Not 8x and 32x, and this test has twice encoded an overstated figure. What a
     # request *holds* is the window plus one step's token budget: eviction runs after
     # the step has allocated slots for everything it scheduled, so the whole prefill
     # chunk is resident alongside the window. That term dominates a narrow window, so
     # the gain is real and far below the ratio of the windows themselves.
-    assert wide > full * 1.5
-    assert narrow > wide
-    assert wide < full * 8
-    assert narrow < full * 32
+    #
+    # Pinned to the arithmetic rather than to a band, because a band is what let this
+    # pass for two wrong values in a row: the pre-fix steady-state figures were 7.97x
+    # and 31.51x, which sit inside any bound loose enough to admit the true 2.66x and
+    # 3.55x. Every term below is independently derivable -- 32768 tokens over a
+    # 16-token block for the unbounded case, `windowed_blocks_for_one_request` for the
+    # other two, less the reserved null block -- so an edit that re-breaks the peak
+    # moves one side and not the other.
+    from pvllm.sim.memory import windowed_blocks_for_one_request
+
+    budget = 8192  # dense-8b's default max_num_batched_tokens at this max_model_len
+    assert full == pytest.approx(blocks / (32768 // 16), rel=1e-3)
+    for window, measured in ((4096, wide), (1024, narrow)):
+        held = windowed_blocks_for_one_request(window, 16, 32768, budget)
+        assert measured == pytest.approx((blocks - 1) / held, rel=1e-3), window
+    assert 2.0 < wide / full < 3.5
+    assert 1.0 < narrow / wide < 1.6
 
 
 def test_a_window_larger_than_the_context_changes_nothing():

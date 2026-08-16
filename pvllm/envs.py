@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     PVLLM_PLUGINS: list[str] | None = None
     PVLLM_USE_V2_MODEL_RUNNER: bool | None = None
     PVLLM_ENABLE_V1_MULTIPROCESSING: bool = False
+    PVLLM_ATTENTION_BACKEND: str | None = None
 
 
 def _maybe_convert_bool(value: str | None) -> bool | None:
@@ -90,6 +91,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "PVLLM_USE_V2_MODEL_RUNNER": lambda: _maybe_convert_bool(
         os.getenv("PVLLM_USE_V2_MODEL_RUNNER", None)
     ),
+    # Mirrors VLLM_ATTENTION_BACKEND. There is exactly one simulated backend, so the
+    # only useful thing this can do is *refuse* -- which is the point: a script that
+    # pins FLASH_ATTN or FLASHINFER is asking for kernel behaviour nothing here
+    # models, and finding that out at startup beats trusting a latency number that
+    # silently came from something else.
+    "PVLLM_ATTENTION_BACKEND": lambda: os.getenv("PVLLM_ATTENTION_BACKEND") or None,
 }
 
 

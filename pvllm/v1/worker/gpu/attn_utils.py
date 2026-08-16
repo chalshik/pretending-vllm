@@ -21,6 +21,7 @@ from pvllm.v1.kv_cache_interface import (
     KVCacheSpec,
     MambaSpec,
     MLAAttentionSpec,
+    SlidingWindowMLASpec,
     SlidingWindowSpec,
 )
 from pvllm.v1.worker.gpu.block_table import BlockTables
@@ -42,6 +43,15 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
     `--sliding-window` overrides the card, and it makes *every* layer windowed. That
     is what the flag means upstream too: it is a way to ask "what would this model
     cost with a window", not a way to add one to a hybrid pattern.
+
+    Under pipeline parallelism the spec describes the stage that *binds* -- the one
+    whose layers cost the most -- rather than stage 0. pvllm runs one worker standing
+    for the whole deployment, so whichever stage it reports is the one the pool is
+    sized from, and stage 0 is systematically the cheap one: upstream pushes the
+    remainder onto the middle partitions, so 32 layers over 7 stages is `4,4,5,5,5,5,4`
+    and sizing from the 4 promises a pool the 5-layer stages cannot build. On a
+    hybrid it is worse than a fraction -- stage 0 of a block-ordered pattern can hold
+    no attention layers at all and report no KV cache.
     """
     model_config = vllm_config.model_config
     cache_config = vllm_config.cache_config
@@ -51,11 +61,7 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
     kv_cache_dtype = cache_config.resolved_cache_dtype or model_config.resolved_dtype
     from pvllm.sim.model_db import DTYPE_BYTES
 
-    num_layers = model_config.get_num_layers(
-        parallel_config.tensor_parallel_size,
-        parallel_config.pipeline_parallel_size,
-    )
-    card = _model_card(vllm_config)
+    card = resolve_model_card(vllm_config)
     block_size = cache_config.block_size
     num_kv_heads = model_config.get_num_kv_heads(parallel_config.tensor_parallel_size)
     head_size = model_config.get_head_size()
@@ -83,6 +89,21 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
         )
 
     def windowed(window: int) -> SlidingWindowSpec:
+        if card is not None and card.use_mla:
+            # R6.7. Same latent as `full()`, same reason: MLA decides how big a page
+            # is, the window decides how many of them a request holds, and the two
+            # compose. Reading the ordinary `num_kv_heads`/`head_size` here made a
+            # windowed MLA model report a page 7.1x too large -- and made it shard
+            # under TP, which the whole point of `full()`'s branch is that it does
+            # not.
+            return SlidingWindowMLASpec(
+                block_size=block_size,
+                num_kv_heads=1,
+                head_size=card.mla_head_size,
+                dtype=kv_cache_dtype,
+                dtype_bytes=dtype_bytes,
+                sliding_window=window,
+            )
         return SlidingWindowSpec(
             block_size=block_size,
             num_kv_heads=num_kv_heads,
@@ -92,59 +113,75 @@ def get_kv_cache_spec(vllm_config: VllmConfig) -> dict[str, KVCacheSpec]:
             sliding_window=window,
         )
 
-    if cache_config.sliding_window is not None:
-        uniform: KVCacheSpec = windowed(cache_config.sliding_window)
-        return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+    def build(start: int, end: int) -> dict[str, KVCacheSpec]:
+        """Every spec for the layers `[start, end)` -- one pipeline stage's worth."""
+        if cache_config.sliding_window is not None:
+            uniform: KVCacheSpec = windowed(cache_config.sliding_window)
+            return {f"model.layers.{i}.self_attn": uniform for i in range(start, end)}
 
-    if card is not None and card.is_state_space:
-        # R6.7. Attention layers cache KV; Mamba layers hold a fixed recurrent state;
-        # MLP layers hold neither and so produce no spec at all. The pattern string is
-        # what the model publishes, and reading it here keeps the layer identity in one
-        # place.
-        assert card.hybrid_override_pattern is not None
-        state_spec = MambaSpec(
-            block_size=block_size,
-            state_bytes=card.mamba_state_bytes_per_layer(
-                parallel_config.tensor_parallel_size
-            ),
-            page_size_padded=cache_config.mamba_page_size_padded,
-        )
-        attention_spec = full()
-        layered: dict[str, KVCacheSpec] = {}
-        for index, kind in enumerate(card.hybrid_override_pattern[:num_layers]):
-            if kind == "M":
-                layered[f"model.layers.{index}.mixer"] = state_spec
-            elif kind == "*":
-                layered[f"model.layers.{index}.self_attn"] = attention_spec
-        return layered
-
-    if card is not None and card.is_hybrid_attention:
-        assert card.sliding_window is not None
-        if scheduler_config is not None and getattr(
-            scheduler_config, "disable_hybrid_kv_cache_manager", False
-        ):
-            # Upstream's escape hatch: promote every windowed layer to full
-            # attention, giving up the memory saving and keeping one group. Worth
-            # having as more than a compatibility switch -- the two runs side by
-            # side *are* the capacity argument for hybrid attention.
-            return {f"model.layers.{i}.self_attn": full() for i in range(num_layers)}
-        full_spec = full()
-        window_spec = windowed(card.sliding_window)
-        return {
-            f"model.layers.{i}.self_attn": (
-                full_spec if card.layer_is_full_attention(i) else window_spec
+        if card is not None and card.is_state_space:
+            # R6.7. Attention layers cache KV; Mamba layers hold a fixed recurrent
+            # state; MLP layers hold neither and so produce no spec at all. The
+            # pattern string is what the model publishes, and reading it here keeps
+            # the layer identity in one place.
+            assert card.hybrid_override_pattern is not None
+            state_spec = MambaSpec(
+                block_size=block_size,
+                state_bytes=card.mamba_state_bytes_per_layer(
+                    parallel_config.tensor_parallel_size
+                ),
+                page_size_padded=cache_config.mamba_page_size_padded,
             )
-            for i in range(num_layers)
-        }
-    if card is not None and card.sliding_window is not None:
-        uniform = windowed(card.sliding_window)
-        return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+            attention_spec = full()
+            layered: dict[str, KVCacheSpec] = {}
+            for index in range(start, end):
+                kind = card.hybrid_override_pattern[index]
+                if kind == "M":
+                    layered[f"model.layers.{index}.mixer"] = state_spec
+                elif kind == "*":
+                    layered[f"model.layers.{index}.self_attn"] = attention_spec
+            return layered
 
-    uniform = full()
-    return {f"model.layers.{i}.self_attn": uniform for i in range(num_layers)}
+        if card is not None and card.is_hybrid_attention:
+            assert card.sliding_window is not None
+            if scheduler_config is not None and getattr(
+                scheduler_config, "disable_hybrid_kv_cache_manager", False
+            ):
+                # Upstream's escape hatch: promote every windowed layer to full
+                # attention, giving up the memory saving and keeping one group. Worth
+                # having as more than a compatibility switch -- the two runs side by
+                # side *are* the capacity argument for hybrid attention.
+                return {
+                    f"model.layers.{i}.self_attn": full() for i in range(start, end)
+                }
+            full_spec = full()
+            window_spec = windowed(card.sliding_window)
+            return {
+                f"model.layers.{i}.self_attn": (
+                    full_spec if card.layer_is_full_attention(i) else window_spec
+                )
+                for i in range(start, end)
+            }
+        if card is not None and card.sliding_window is not None:
+            uniform = windowed(card.sliding_window)
+            return {f"model.layers.{i}.self_attn": uniform for i in range(start, end)}
+
+        uniform = full()
+        return {f"model.layers.{i}.self_attn": uniform for i in range(start, end)}
+
+    stages = model_config.pipeline_stage_ranges(parallel_config.pipeline_parallel_size)
+    if len(stages) == 1:
+        return build(*stages[0])
+    # The stage that binds: the one whose layers need the most cache. Sizing the
+    # pool from any cheaper stage reports blocks the deployment cannot allocate on
+    # every rank, which is the direction that turns a capacity plan into an outage.
+    return max(
+        (build(start, end) for start, end in stages),
+        key=lambda specs: sum(spec.page_size_bytes for spec in specs.values()),
+    )
 
 
-def _model_card(vllm_config: VllmConfig) -> Any:
+def resolve_model_card(vllm_config: VllmConfig) -> Any:
     """The card this deployment resolved to, or `None` if it has no counterpart.
 
     Read here rather than passed down because the attention shape is a property of

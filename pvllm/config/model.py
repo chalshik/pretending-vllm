@@ -97,15 +97,52 @@ class ModelConfig:
         """Layers resident on one device. Pipeline parallelism shards these."""
         return self.hf_config.num_hidden_layers // pp_size
 
+    def pipeline_stage_ranges(self, pp_size: int = 1) -> list[tuple[int, int]]:
+        """`[start, end)` layer indices for every pipeline stage. R14.
+
+        Ported from upstream's `get_pp_indices`: layers divide evenly and the
+        remainder goes onto the partitions *before* the last, which upstream
+        deliberately excludes because it carries the output embedding. So the stages
+        are not interchangeable -- 32 layers over 7 stages is `4,4,5,5,5,5,4`, and
+        which stage a layer lands on decides both how much a stage holds and, for a
+        hybrid, what kind of layer it holds.
+
+        pvllm runs one worker standing for the whole deployment, so it has to choose
+        a stage to report. Anything sized for the *smallest* stage describes a pool
+        the deployment cannot actually build.
+        """
+        num_layers = self.hf_config.num_hidden_layers
+        partitions = [num_layers // pp_size] * pp_size
+        for index in range(2, (num_layers % pp_size) + 2):
+            partitions[-index] += 1
+        ranges: list[tuple[int, int]] = []
+        start = 0
+        for size in partitions:
+            ranges.append((start, start + size))
+            start += size
+        return ranges
+
     def get_num_kv_heads(self, tp_size: int = 1) -> int:
         """KV heads resident on one device. At least one, as upstream replicates
         rather than splitting a head when TP exceeds the KV head count."""
+        if self.hf_config.use_mla:
+            # R6.7. One, before any division: MLA caches a single compressed latent
+            # per token, so decode is MQA and the cache is replicated rather than
+            # sharded. Upstream returns 1 here for the same reason and at the same
+            # point. `num_key_value_heads` is still declared on an MLA card because
+            # the projections use it, but it stopped describing the KV cache -- and
+            # reading it anyway sized a windowed MLA model as ordinary multi-head
+            # attention.
+            return 1
         return max(1, self.hf_config.num_key_value_heads // tp_size)
 
     def get_num_attention_heads(self, tp_size: int = 1) -> int:
         return max(1, self.hf_config.num_attention_heads // tp_size)
 
     def get_head_size(self) -> int:
+        if self.hf_config.use_mla:
+            # The latent, not a projection head: `kv_lora_rank + qk_rope_head_dim`.
+            return self.hf_config.mla_head_size
         return self.hf_config.head_dim
 
     def get_vocab_size(self) -> int:

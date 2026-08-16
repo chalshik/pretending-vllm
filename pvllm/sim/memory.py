@@ -239,6 +239,29 @@ def windowed_blocks_for_one_request(
     return -(-peak_tokens // block_size) + 1
 
 
+def state_blocks_for_one_request(
+    block_size: int, max_model_len: int, max_in_flight_tokens: int
+) -> int:
+    """State pages a recurrent request holds at its *peak*. R6.7, R10.6.
+
+    A recurrent state is one page: position N's state already summarises every token
+    before it, so `MambaManager` frees every snapshot older than the newest and the
+    request settles back to a single live page whatever its context length. That is
+    the capacity claim state-space layers exist to make, and charging
+    `ceil(max_model_len / block_size)` -- which is what fell out of inheriting full
+    attention's accounting -- contradicted it by a factor that grew with context.
+
+    The peak is above the resting one for the same reason a window's is: eviction
+    runs in `update_from_output`, after the step has allocated slots for everything
+    it scheduled, so a prefill chunk's worth of boundaries is briefly resident
+    alongside the live state. Worst case is a request sitting one token below a block
+    boundary when a full chunk lands, which is `1 + ceil(chunk / block_size)` -- the
+    same shape as a window of one token, because that is what a recurrent state is.
+    """
+    peak = 1 + -(-min(max_in_flight_tokens, max_model_len) // block_size)
+    return min(peak, -(-max_model_len // block_size))
+
+
 def compute_memory_profile(
     model: ModelCard,
     device: DeviceCard,
@@ -378,10 +401,15 @@ def compute_memory_profile(
                 )
                 usable_blocks_adjustment = 1
             elif type(group.kv_cache_spec).__name__ == "MambaSpec":
-                # R6.7. One snapshot per block boundary, same arithmetic as attention
-                # once the block size is aligned -- but the *page* is a fixed state, so
-                # what a long context costs here is snapshots rather than KV.
-                blocks_for_one_request += (max_model_len + block_size - 1) // block_size
+                # R6.7. *One* live state, not one per block boundary. The earlier
+                # arithmetic here was the attention branch spelled twice -- the same
+                # expression on both sides of the `elif`, so the branch this model
+                # exists to need changed nothing, and it charged a recurrent state as
+                # linear in context, which is the shape it exists not to have.
+                blocks_for_one_request += state_blocks_for_one_request(
+                    block_size, max_model_len, max_num_batched_tokens
+                )
+                usable_blocks_adjustment = 1
             else:
                 blocks_for_one_request += (max_model_len + block_size - 1) // block_size
     elif sliding_window is not None and sliding_window < max_model_len:
@@ -389,11 +417,18 @@ def compute_memory_profile(
             sliding_window, block_size, max_model_len, max_num_batched_tokens
         )
         usable_blocks_adjustment = 1
-    if num_gpu_blocks < blocks_for_one_request:
+    # Against the blocks that can actually be handed out. A model whose groups shed
+    # reserves block 0 as the null block, so `num_gpu_blocks - 1` is the real
+    # ceiling -- and comparing the raw pool let a config through whose own reported
+    # `max_concurrency` was below 1.0, which is a silent hang: `allocate_slots`
+    # returns `None` every step, forever. The refusal message named a number that
+    # itself did not work.
+    if num_gpu_blocks - usable_blocks_adjustment < blocks_for_one_request:
         raise SimOutOfMemoryError(
-            f"The KV cache holds {num_gpu_blocks} blocks, but a single request at "
-            f"max_model_len={max_model_len} (window {tokens_for_one_request}) needs "
-            f"{blocks_for_one_request} "
+            f"The KV cache holds {num_gpu_blocks} blocks "
+            f"({num_gpu_blocks - usable_blocks_adjustment} allocatable), but a "
+            f"single request at max_model_len={max_model_len} "
+            f"(window {tokens_for_one_request}) needs {blocks_for_one_request} "
             f"(block_size={block_size}). No request could ever be served.\n"
             f"Try: lower max_model_len, raise gpu_memory_utilization, or pick a "
             f"larger device card."

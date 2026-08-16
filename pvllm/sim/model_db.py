@@ -117,6 +117,32 @@ class ModelCard:
     def is_moe(self) -> bool:
         return self.num_experts > 0
 
+    def __post_init__(self) -> None:
+        """Refuse a card that half-declares a feature.
+
+        Cards are a documented extension point -- `load_model_card` takes an explicit
+        path and its own error message invites you to add one -- so a typo in a field
+        name is a reachable authoring mistake, and `from_dict` sweeps unknown keys
+        into `extra` without complaint. The failure without this check is not a
+        crash: it is a plausible capacity number that is wrong by 7.1x, produced from
+        fields the architecture no longer uses.
+        """
+        if (self.kv_lora_rank is None) != (self.qk_rope_head_dim is None):
+            declared, missing = (
+                ("kv_lora_rank", "qk_rope_head_dim")
+                if self.kv_lora_rank is not None
+                else ("qk_rope_head_dim", "kv_lora_rank")
+            )
+            raise ValueError(
+                f"model card {self.name!r} declares {declared} but not {missing}. "
+                f"Multi-head latent attention needs both -- the cached latent is "
+                f"kv_lora_rank + qk_rope_head_dim wide (R6.7). Set both for an MLA "
+                f"model (DeepSeek-V2/V3 class) or neither for ordinary attention; "
+                f"with only one the card would be sized as multi-head attention "
+                f"from num_key_value_heads and head_dim, which an MLA model does "
+                f"not use for KV."
+            )
+
     @property
     def is_state_space(self) -> bool:
         """R6.7. Whether any layer holds a recurrent state instead of KV."""
@@ -170,7 +196,16 @@ class ModelCard:
 
     @property
     def use_mla(self) -> bool:
-        """R6.7. Whether attention stores a compressed latent rather than K and V."""
+        """R6.7. Whether attention stores a compressed latent rather than K and V.
+
+        `__post_init__` refuses a card that declares one half of the pair, so this
+        really is the two-state property its field comment claims. Left unchecked,
+        a card with `kv_lora_rank` and a misspelled `qk_rope_head_dim` took the
+        ordinary-attention branch and was sized from `num_key_value_heads` and
+        `head_dim` -- fields an MLA architecture still declares and no longer uses
+        for KV -- so it reported 7.1x the KV per token with the rank sitting in a
+        recognized field that was silently ignored.
+        """
         return self.kv_lora_rank is not None and self.qk_rope_head_dim is not None
 
     @property
