@@ -100,14 +100,6 @@ class OpenAIServingCompletion:
                 param="prompt",
             )
 
-        if request.n != 1:
-            return create_error_response(
-                "n > 1 is handled by the parallel sampling layer (requirement R11.7), "
-                "which lands in M2.",
-                err_type="NotImplementedError",
-                param="n",
-            )
-
         request_id = self._next_request_id()
 
         try:
@@ -155,24 +147,30 @@ class OpenAIServingCompletion:
         if final is None:
             return create_error_response("The engine produced no output.")
 
-        completion = final.outputs[0]
+        # R11.7. One choice per completion, in index order. `n == 1` is the same
+        # code path with one element, so the common case cannot drift from the
+        # parallel one.
+        completions = sorted(final.outputs, key=lambda item: item.index)
+        generated = sum(len(item.token_ids) for item in completions)
         return CompletionResponse(
             id=request_id,
             created=self._created(),
             model=request.model,
             choices=[
                 CompletionResponseChoice(
-                    index=0,
-                    text=completion.text,
-                    finish_reason=completion.finish_reason,
-                    stop_reason=completion.stop_reason,
+                    index=item.index,
+                    text=item.text,
+                    finish_reason=item.finish_reason,
+                    stop_reason=item.stop_reason,
                 )
+                for item in completions
             ],
             usage=UsageInfo(
                 prompt_tokens=len(final.prompt_token_ids or ()),
-                completion_tokens=len(completion.token_ids),
-                total_tokens=len(final.prompt_token_ids or ())
-                + len(completion.token_ids),
+                # Every choice's tokens: the prompt is billed once and shared
+                # through the prefix cache, but each completion was generated.
+                completion_tokens=generated,
+                total_tokens=len(final.prompt_token_ids or ()) + generated,
                 prompt_tokens_details={"cached_tokens": final.num_cached_tokens},
             ),
         )
@@ -200,23 +198,25 @@ class OpenAIServingCompletion:
                 lora_request=lora_request,
             ):
                 num_prompt_tokens = len(output.prompt_token_ids or ())
-                completion = output.outputs[0]
-                num_completion_tokens += len(completion.token_ids)
-
-                chunk = CompletionStreamResponse(
-                    id=request_id,
-                    created=created,
-                    model=model,
-                    choices=[
-                        CompletionResponseStreamChoice(
-                            index=0,
-                            text=completion.text,
-                            finish_reason=completion.finish_reason,
-                            stop_reason=completion.stop_reason,
-                        )
-                    ],
-                )
-                yield f"data: {chunk.model_dump_json(exclude_unset=False)}\n\n"
+                # R11.7. Under `n > 1` a step's output carries whichever child
+                # advanced, and its `index` is the choice index the client sees. One
+                # chunk per completion, as OpenAI streams them.
+                for completion in output.outputs:
+                    num_completion_tokens += len(completion.token_ids)
+                    chunk = CompletionStreamResponse(
+                        id=request_id,
+                        created=created,
+                        model=model,
+                        choices=[
+                            CompletionResponseStreamChoice(
+                                index=completion.index,
+                                text=completion.text,
+                                finish_reason=completion.finish_reason,
+                                stop_reason=completion.stop_reason,
+                            )
+                        ],
+                    )
+                    yield f"data: {chunk.model_dump_json(exclude_unset=False)}\n\n"
 
             if request.stream_options and request.stream_options.include_usage:
                 # R2.3. Empty `choices` is OpenAI's shape here, and clients that

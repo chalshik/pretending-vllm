@@ -163,6 +163,7 @@ observable rather than approximated.
 | `--enable-lora --max-loras N` | adapters cost KV pool memory, and `max_loras` bounds *distinct* adapters — a real source of queueing |
 | `--lora-modules name=path` | each adapter is served under its own model name: `/v1/models` lists it, and a request naming it routes to it |
 | `--sliding-window N` | KV per request stops growing with the conversation; concurrency rises in proportion |
+| `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
 | an `image_url` content part | 256 placeholder tokens, a separate encoder budget, an encoder pass priced at ViT-L scale, and a cache the second request with the same image hits |
 | a KV connector | a second engine pulls a published prefix instead of recomputing it; both sides pay — the producer for its writes, the consumer for its reads — so `kv_role` and your store's bandwidth decide whether it wins against recomputing |

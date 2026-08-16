@@ -97,13 +97,7 @@ class OpenAIServingChat:
                 self.served_model_names
                 + (list(self.models.lora_modules) if self.models is not None else []),
             )
-        if request.n != 1:
-            return create_error_response(
-                "n > 1 is handled by the parallel sampling layer (requirement R11.7), "
-                "which lands in M2.",
-                err_type="NotImplementedError",
-                param="n",
-            )
+
         if not request.messages:
             return create_error_response(
                 "messages must not be empty.", param="messages"
@@ -167,24 +161,27 @@ class OpenAIServingChat:
         if final is None:
             return create_error_response("The engine produced no output.")
 
-        completion = final.outputs[0]
+        # R11.7. One choice per completion, in index order.
+        completions = sorted(final.outputs, key=lambda item: item.index)
         num_prompt_tokens = len(final.prompt_token_ids or ())
+        generated = sum(len(item.token_ids) for item in completions)
         return ChatCompletionResponse(
             id=request_id,
             created=self._created(),
             model=request.model,
             choices=[
                 ChatCompletionResponseChoice(
-                    index=0,
-                    message=ChatMessage(role="assistant", content=completion.text),
-                    finish_reason=completion.finish_reason,
-                    stop_reason=completion.stop_reason,
+                    index=item.index,
+                    message=ChatMessage(role="assistant", content=item.text),
+                    finish_reason=item.finish_reason,
+                    stop_reason=item.stop_reason,
                 )
+                for item in completions
             ],
             usage=UsageInfo(
                 prompt_tokens=num_prompt_tokens,
-                completion_tokens=len(completion.token_ids),
-                total_tokens=num_prompt_tokens + len(completion.token_ids),
+                completion_tokens=generated,
+                total_tokens=num_prompt_tokens + generated,
                 prompt_tokens_details={"cached_tokens": final.num_cached_tokens},
             ),
         )
@@ -210,10 +207,13 @@ class OpenAIServingChat:
             id=request_id,
             created=created,
             model=model,
+            # R11.7. One role chunk per choice, so a client that reads the role from
+            # the first chunk it sees for a given index gets one for every choice.
             choices=[
                 ChatCompletionResponseStreamChoice(
-                    index=0, delta=DeltaMessage(role="assistant")
+                    index=index, delta=DeltaMessage(role="assistant")
                 )
+                for index in range(sampling_params.n)
             ],
         )
         yield f"data: {first.model_dump_json()}\n\n"
@@ -228,23 +228,24 @@ class OpenAIServingChat:
                 mm_features=mm_features,
             ):
                 num_prompt_tokens = len(output.prompt_token_ids or ())
-                completion = output.outputs[0]
-                num_completion_tokens += len(completion.token_ids)
-
-                chunk = ChatCompletionStreamResponse(
-                    id=request_id,
-                    created=created,
-                    model=model,
-                    choices=[
-                        ChatCompletionResponseStreamChoice(
-                            index=0,
-                            delta=DeltaMessage(content=completion.text),
-                            finish_reason=completion.finish_reason,
-                            stop_reason=completion.stop_reason,
-                        )
-                    ],
-                )
-                yield f"data: {chunk.model_dump_json()}\n\n"
+                # R11.7. One chunk per completion that advanced this step, carrying
+                # its own choice index.
+                for completion in output.outputs:
+                    num_completion_tokens += len(completion.token_ids)
+                    chunk = ChatCompletionStreamResponse(
+                        id=request_id,
+                        created=created,
+                        model=model,
+                        choices=[
+                            ChatCompletionResponseStreamChoice(
+                                index=completion.index,
+                                delta=DeltaMessage(content=completion.text),
+                                finish_reason=completion.finish_reason,
+                                stop_reason=completion.stop_reason,
+                            )
+                        ],
+                    )
+                    yield f"data: {chunk.model_dump_json()}\n\n"
 
             if request.stream_options and request.stream_options.include_usage:
                 usage_chunk = ChatCompletionStreamResponse(

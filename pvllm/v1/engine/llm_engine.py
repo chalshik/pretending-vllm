@@ -22,6 +22,7 @@ from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine.core_client import EngineCoreClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
+from pvllm.v1.engine.parallel_sampling import ParentRequest
 from pvllm.v1.metrics.stats import IterationStats
 
 logger = init_logger(__name__)
@@ -72,23 +73,41 @@ class LLMEngine:
         lora_request: Any = None,
         mm_features: list[Any] | None = None,
     ) -> None:
-        engine_request = self.input_processor.process_inputs(
-            request_id,
-            prompt,
-            sampling_params,
-            priority=priority,
-            lora_request=lora_request,
-            mm_features=mm_features,
+        # R11.7. `n > 1` fans out here, in the frontend, exactly as upstream does:
+        # the engine core has no notion of `n`, and four completions of one prompt
+        # are four requests that share a prompt. They queue, preempt, and share KV
+        # through the ordinary prefix cache independently -- which is the behaviour a
+        # capacity plan needs to see, not an implementation detail.
+        parent = (
+            ParentRequest(request_id, sampling_params)
+            if sampling_params.n > 1
+            else None
         )
-        # The arrival time comes back from the core, which stamped it (R19.1).
-        self.engine_core.add_request(engine_request)
-        self.output_processor.add_request(
-            request_id=request_id,
-            prompt=prompt if isinstance(prompt, str) else None,
-            prompt_token_ids=engine_request.prompt_token_ids or [],
-            sampling_params=sampling_params,
-            arrival_time=self.engine_core.clock_time,
-        )
+        for index in range(sampling_params.n):
+            child_id, child_params = (
+                parent.child_info(index)
+                if parent is not None
+                else (request_id, sampling_params)
+            )
+            engine_request = self.input_processor.process_inputs(
+                child_id,
+                prompt,
+                child_params,
+                priority=priority,
+                lora_request=lora_request,
+                mm_features=mm_features,
+            )
+            # The arrival time comes back from the core, which stamped it (R19.1).
+            self.engine_core.add_request(engine_request)
+            self.output_processor.add_request(
+                request_id=child_id,
+                prompt=prompt if isinstance(prompt, str) else None,
+                prompt_token_ids=engine_request.prompt_token_ids or [],
+                sampling_params=child_params,
+                arrival_time=self.engine_core.clock_time,
+                parent_request=parent,
+                index=index,
+            )
 
     def abort_request(self, request_ids: list[str]) -> None:
         self.engine_core.abort_requests(request_ids)

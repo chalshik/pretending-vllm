@@ -11,6 +11,7 @@ stopped on a *string*, because that needs text (R11.5).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from pvllm.logger import init_logger
 from pvllm.outputs import CompletionOutput, RequestOutput
@@ -39,6 +40,12 @@ class RequestState:
     arrival_time: float
     is_finished: bool = False
     num_cached_tokens: int = 0
+
+    #: R11.7. The client request this is one of `n` children of, and which of them.
+    #: `None` for the overwhelming majority of requests, where `n == 1` and the
+    #: engine request *is* the client request.
+    parent_request: Any = None
+    index: int = 0
 
     # --- timing (R12.1) ---------------------------------------------------
     # Every stamp comes from the engine core's clock, so under a virtual clock
@@ -138,6 +145,8 @@ class OutputProcessor:
         prompt_token_ids: list[int],
         sampling_params: SamplingParams,
         arrival_time: float,
+        parent_request: Any = None,
+        index: int = 0,
     ) -> None:
         if request_id in self.request_states:
             raise ValueError(f"request {request_id!r} already exists")
@@ -150,6 +159,8 @@ class OutputProcessor:
                 self.tokenizer, list(prompt_token_ids), sampling_params
             ),
             arrival_time=arrival_time,
+            parent_request=parent_request,
+            index=index,
         )
 
     def abort_requests(self, request_ids: list[str]) -> None:
@@ -228,36 +239,79 @@ class OutputProcessor:
                 else list(state.detokenizer.output_token_ids)
             )
 
+            completion = CompletionOutput(
+                index=state.index,
+                text=text,
+                token_ids=token_ids,
+                finish_reason=str(finish_reason) if finished else None,
+                stop_reason=stop_string
+                if stop_string is not None
+                else engine_output.stop_reason,
+            )
+
+            # R11.7. A child of an `n > 1` request is reported under its *parent's*
+            # id, with the siblings gathered beside it. Streaming passes each chunk
+            # through as it arrives; a non-streaming request waits for the last
+            # child so the response carries all `n` in index order, whatever order
+            # they actually finished in.
+            parent = state.parent_request
+            if parent is None:
+                completions = [completion]
+                report_id = engine_output.request_id
+                report_finished = finished
+            else:
+                completions, report_finished = parent.collect(
+                    engine_output.request_id, completion
+                )
+                report_id = parent.request_id
+                if not completions and not report_finished:
+                    if finished:
+                        self._retire(
+                            state,
+                            engine_output.request_id,
+                            now,
+                            finish_reason,
+                            iteration_stats,
+                        )
+                    continue
+
             outputs.append(
                 RequestOutput(
-                    request_id=engine_output.request_id,
+                    request_id=report_id,
                     prompt=state.prompt,
                     prompt_token_ids=state.prompt_token_ids,
-                    outputs=[
-                        CompletionOutput(
-                            index=0,
-                            text=text,
-                            token_ids=token_ids,
-                            finish_reason=str(finish_reason) if finished else None,
-                            stop_reason=stop_string
-                            if stop_string is not None
-                            else engine_output.stop_reason,
-                        )
-                    ],
-                    finished=finished,
+                    outputs=completions,
+                    finished=report_finished,
                     num_cached_tokens=state.num_cached_tokens,
                 )
             )
 
             if finished:
-                state.is_finished = True
-                if iteration_stats is not None:
-                    iteration_stats.finished_requests.append(
-                        state.finished_stats(now, str(finish_reason))
-                    )
-                self.request_states.pop(engine_output.request_id, None)
+                self._retire(
+                    state,
+                    engine_output.request_id,
+                    now,
+                    finish_reason,
+                    iteration_stats,
+                )
 
         return outputs
+
+    def _retire(
+        self,
+        state: RequestState,
+        request_id: str,
+        now: float,
+        finish_reason: Any,
+        iteration_stats: IterationStats | None,
+    ) -> None:
+        """Drop a finished request's frontend state and record what it contributed."""
+        state.is_finished = True
+        if iteration_stats is not None:
+            iteration_stats.finished_requests.append(
+                state.finished_stats(now, str(finish_reason))
+            )
+        self.request_states.pop(request_id, None)
 
     def take_stopped_by_string(self) -> list[str]:
         """Drain the requests the frontend ended on a stop string.

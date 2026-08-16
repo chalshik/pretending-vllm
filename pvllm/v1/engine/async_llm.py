@@ -36,6 +36,7 @@ from pvllm.tokenizers.protocol import TokenizerLike
 from pvllm.v1.engine.core_client import EngineCoreClient
 from pvllm.v1.engine.input_processor import InputProcessor
 from pvllm.v1.engine.output_processor import OutputProcessor
+from pvllm.v1.engine.parallel_sampling import ParentRequest
 from pvllm.v1.metrics.stats import IterationStats
 
 logger = init_logger(__name__)
@@ -152,24 +153,44 @@ class AsyncLLM:
 
         queue: asyncio.Queue[RequestOutput | BaseException] = asyncio.Queue()
         self._queues[request_id] = queue
+        #: The engine ids to abort if the consumer goes away. Equal to `[request_id]`
+        #: unless `n > 1`, where the client's id names no engine request at all.
+        children: list[str] = []
 
         try:
-            engine_request = self.input_processor.process_inputs(
-                request_id,
-                prompt,
-                sampling_params,
-                priority=priority,
-                lora_request=lora_request,
-                mm_features=mm_features,
+            # R11.7. The same fan-out as the offline engine: `n` children, one
+            # response. The queue is registered under the *parent's* id, which is
+            # what the output handler routes finished aggregates to.
+            parent = (
+                ParentRequest(request_id, sampling_params)
+                if sampling_params.n > 1
+                else None
             )
-            self.engine_core.add_request(engine_request)
-            self.output_processor.add_request(
-                request_id=request_id,
-                prompt=prompt if isinstance(prompt, str) else None,
-                prompt_token_ids=engine_request.prompt_token_ids or [],
-                sampling_params=sampling_params,
-                arrival_time=self.engine_core.clock_time,
-            )
+            for index in range(sampling_params.n):
+                child_id, child_params = (
+                    parent.child_info(index)
+                    if parent is not None
+                    else (request_id, sampling_params)
+                )
+                engine_request = self.input_processor.process_inputs(
+                    child_id,
+                    prompt,
+                    child_params,
+                    priority=priority,
+                    lora_request=lora_request,
+                    mm_features=mm_features,
+                )
+                self.engine_core.add_request(engine_request)
+                self.output_processor.add_request(
+                    request_id=child_id,
+                    prompt=prompt if isinstance(prompt, str) else None,
+                    prompt_token_ids=engine_request.prompt_token_ids or [],
+                    sampling_params=child_params,
+                    arrival_time=self.engine_core.clock_time,
+                    parent_request=parent,
+                    index=index,
+                )
+                children.append(child_id)
             self._ensure_output_handler()
 
             while True:
@@ -184,9 +205,14 @@ class AsyncLLM:
             # returns a disconnected client's blocks within one step; without it they
             # are held until the request would have finished on its own.
             self._queues.pop(request_id, None)
-            if request_id in self.output_processor.request_states:
-                self.engine_core.abort_requests([request_id])
-                self.output_processor.abort_requests([request_id])
+            live = [
+                child
+                for child in (children or [request_id])
+                if child in self.output_processor.request_states
+            ]
+            if live:
+                self.engine_core.abort_requests(live)
+                self.output_processor.abort_requests(live)
 
     async def abort(self, request_id: str) -> None:
         self.engine_core.abort_requests([request_id])

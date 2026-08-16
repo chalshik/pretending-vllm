@@ -293,10 +293,45 @@ async def test_an_unmodeled_feature_is_400_not_500(client):
     problem with the request. A 500 would send a client into retry logic for
     something that will never succeed."""
     response = await client.post(
-        "/v1/completions", json={"model": MODEL, "prompt": "x", "n": 3}
+        "/v1/completions", json={"model": MODEL, "prompt": ["one", "two"]}
     )
     assert response.status_code == 400
     assert response.json()["error"]["type"] == "NotImplementedError"
+
+
+async def test_n_greater_than_one_returns_n_choices(client):
+    """R11.7. `n` is a plain OpenAI parameter, and it used to 400."""
+    response = await client.post(
+        "/v1/completions",
+        json={"model": MODEL, "prompt": "x", "n": 3, "max_tokens": 8},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [choice["index"] for choice in body["choices"]] == [0, 1, 2]
+    # Distinct completions, and the usage counts all three -- the prompt is billed
+    # once and shared through the prefix cache, but each completion was generated.
+    assert len({choice["text"] for choice in body["choices"]}) == 3
+    assert body["usage"]["completion_tokens"] > 8
+
+
+async def test_n_greater_than_one_streams_every_choice(client):
+    response = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": "hi"}],
+            "n": 2,
+            "max_tokens": 6,
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+    indices = set()
+    for event in sse_events(response.text):
+        if isinstance(event, dict):
+            for choice in event.get("choices", ()):
+                indices.add(choice["index"])
+    assert indices == {0, 1}
 
 
 async def test_an_invalid_sampling_parameter_is_400(client):
