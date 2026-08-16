@@ -307,3 +307,37 @@ def test_module_declares_upstream_and_tier(path: Path) -> None:
     assert "Tier:" in docstring, (
         f"{rel}: module docstring must declare a fidelity tier (A/B/C/D). See UPSTREAM.md."
     )
+
+
+def test_the_clock_advances_only_for_device_work() -> None:
+    """R19.1, and the premise `--async-scheduling` is refused on.
+
+    The engine charges modeled *device* time and nothing else: no CPU time, no
+    scheduling time, no serialization time. That is what makes a virtual-clock run
+    and a real-clock run report identical numbers, and it is also why upstream's
+    async scheduler cannot be modeled here -- the thing it hides costs zero.
+
+    Enforced rather than asserted in prose, because the day something starts
+    charging CPU time is the day that refusal becomes wrong and nobody would notice.
+    The allowed sites are the simulated device, the KV-transfer charges the engine
+    core makes on its behalf, and the benchmark runner's arrival gaps.
+    """
+    allowed = {
+        "pvllm/sim/device.py",
+        "pvllm/sim/clock.py",
+        "pvllm/v1/engine/core.py",
+        "pvllm/benchmarks/lib/runner.py",
+    }
+    violations: list[str] = []
+    for path in _python_files():
+        rel = _relative(path)
+        if rel in allowed:
+            continue
+        source = path.read_text()
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if ".advance(" in line or ".advance_async(" in line:
+                violations.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not violations, (
+        "only the device (and the two sites that charge on its behalf) may advance "
+        "the clock:\n" + "\n".join(violations)
+    )

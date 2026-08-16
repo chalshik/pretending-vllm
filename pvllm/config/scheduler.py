@@ -128,9 +128,31 @@ class SchedulerConfig:
                 f"{self.long_prefill_token_threshold}"
             )
         if self.async_scheduling:
+            # Refused on purpose, and the reason is not "unfinished". Upstream's
+            # `AsyncScheduler` overlaps the scheduler's *Python* time with the GPU's
+            # compute by committing to the next batch before the current one's output
+            # lands, carrying `num_output_placeholders` until it does. The thing it
+            # hides is CPU time -- and this engine charges none: the clock advances
+            # only for modeled device work (`SimDevice.execute`), never for
+            # scheduling.
+            #
+            # So porting it would change the C1 decision sequence and change latency
+            # by exactly zero. A capacity study comparing `--async-scheduling` on
+            # against off would see the step counts move and the throughput sit
+            # still, and conclude the flag buys nothing -- when on real hardware it
+            # is a throughput optimization. Refusing is a better answer than a
+            # confidently wrong one, and this joins `spec_acceptance_rate` and
+            # grammar conformance on the short list of things a simulator without a
+            # model cannot derive.
             raise NotImplementedError(
-                "async scheduling (vllm/v1/core/sched/async_scheduler.py) is not "
-                "ported; it needs more than one batch in flight, which lands in M4"
+                "async scheduling (vllm/v1/core/sched/async_scheduler.py) is "
+                "deliberately not modeled. It exists to hide the scheduler's CPU "
+                "time behind the forward pass, and this engine charges no CPU time "
+                "at all -- the clock advances only for modeled device work. Porting "
+                "it would move the scheduling decisions without moving any latency, "
+                "so a comparison of the flag on and off would report that it buys "
+                "nothing. Measure it on real vLLM; everything downstream of the "
+                "decisions it makes is faithful here."
             )
         if self.scheduler_cls is not None:
             raise NotImplementedError(

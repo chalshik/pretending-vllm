@@ -191,6 +191,12 @@ this engine does not have: `--spec-acceptance-rate` (the agreement between a dra
 target) and the structured-output backend's conformance. Measure them on your real pair and
 everything downstream is faithful.
 
+`--async-scheduling` is refused for a related reason. It exists to hide the scheduler's CPU time
+behind the forward pass, and this engine charges no CPU time — the clock advances only for modeled
+device work. Porting it would move the scheduling decisions without moving any latency, so
+comparing the flag on and off would report that it buys nothing, which is the opposite of what real
+hardware says.
+
 ## Comparing configurations
 
 This is the part that costs a GPU reservation otherwise. `pvllm bench` mirrors upstream's
