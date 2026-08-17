@@ -1,0 +1,222 @@
+# The mutation catalogue. R21.6.
+#
+# Each entry names a guarantee, the minimal edit that breaks it, and the test that is
+# supposed to notice. `tools/mutate.py` applies each edit and asserts the named test
+# FAILS. A test that stays green is a test that is not guarding what its name says.
+#
+# This exists because mutation testing has caught a non-discriminating test nearly
+# every time it has been run on this project -- including three the author wrote in
+# the two commits immediately before this file. It was run by hand, from memory, only
+# on freshly written tests. Written down, it becomes something CI enforces instead of
+# something someone remembers.
+#
+# `old` and `new` are TOML multi-line literal strings. Literal, because these are code
+# snippets full of quotes and backslashes and any escaping layer between the file and
+# the source would be one more thing to get wrong. Multi-line, because a single-quoted
+# TOML string cannot contain a single quote at all -- which this catalogue discovered
+# the hard way on its first run.
+#
+# Rules for entries:
+#   * `old` must appear EXACTLY ONCE in `file`. The tool fails loudly if it does not,
+#     which is how the catalogue notices that the code moved underneath it.
+#   * `new` must be a realistic mistake -- a flipped comparison, a dropped `min`, a
+#     removed filter -- not a syntax error. Breaking the parser proves nothing.
+#   * `test` should be a single node id, so a failure is unambiguous and the run fast.
+#   * `why` is the guarantee in one line. If you cannot state it, the entry is not
+#     pinning anything worth pinning.
+
+[[mutation]]
+name = '''responses-stream-sends-no-done-sentinel'''
+why = '''The Responses stream must not send `[DONE]`; a client that waits for one hangs.'''
+file = '''pvllm/entrypoints/openai/api_server.py'''
+old = '''            yield f"event: {event['type']}\ndata: {payload}\n\n"'''
+new = '''            yield f"event: {event['type']}\ndata: {payload}\n\n"
+            yield "data: [DONE]\n\n"'''
+test = '''tests/entrypoints/test_responses_api.py::test_the_stream_sends_no_done_sentinel'''
+
+[[mutation]]
+name = '''responses-sequence-number-is-global'''
+why = '''sequence_number is one monotonic counter for the whole response, not per item.'''
+file = '''pvllm/entrypoints/openai/responses/streaming.py'''
+old = '''        sequence += 1'''
+new = '''        sequence += 0'''
+test = '''tests/entrypoints/test_responses_api.py::test_sequence_numbers_are_global_and_monotonic'''
+
+[[mutation]]
+name = '''responses-store-is-off-by-default'''
+why = '''The store gate defaults off, as stock vLLM does; storing by default diverges.'''
+file = '''pvllm/entrypoints/openai/responses/serving.py'''
+old = '''return bool(int(os.getenv(_STORE_ENV, "0")))'''
+new = '''return bool(int(os.getenv(_STORE_ENV, "1")))'''
+test = '''tests/entrypoints/test_responses_api.py::test_store_is_off_by_default_and_the_request_still_succeeds'''
+
+[[mutation]]
+name = '''responses-tool-choice-rewritten-to-none'''
+why = '''With no tools, upstream rewrites tool_choice to "none" and echoes the rewrite.'''
+file = '''pvllm/entrypoints/openai/responses/protocol.py'''
+old = '''            data["tool_choice"] = "none"'''
+new = '''            pass'''
+test = '''tests/entrypoints/test_responses_api.py::test_tool_choice_is_rewritten_to_none_when_no_tools_are_given'''
+
+[[mutation]]
+name = '''responses-instructions-do-not-carry-over'''
+why = '''A stored conversation's system turns are dropped; only this request's instructions apply.'''
+file = '''pvllm/entrypoints/openai/responses/serving.py'''
+old = '''        messages.extend(m for m in prev_msg if m.get("role") != "system")'''
+new = '''        messages.extend(prev_msg)'''
+test = '''tests/entrypoints/test_responses_api.py::test_instructions_do_not_carry_across_turns'''
+
+[[mutation]]
+name = '''responses-usage-field-names'''
+why = '''This endpoint reports input_tokens/output_tokens, not prompt_tokens/completion_tokens.'''
+file = '''pvllm/entrypoints/openai/responses/protocol.py'''
+old = '''    input_tokens: int = 0
+    input_tokens_details:'''
+new = '''    prompt_tokens: int = 0
+    input_tokens: int = 0
+    input_tokens_details:'''
+test = '''tests/entrypoints/test_responses_api.py::test_usage_uses_input_output_not_prompt_completion'''
+
+[[mutation]]
+name = '''responses-terminal-event-is-always-completed'''
+why = '''vLLM has no response.incomplete event; incompleteness rides inside response.completed.'''
+file = '''pvllm/entrypoints/openai/responses/streaming.py'''
+old = '''        "response.completed",
+        {"response": final.model_dump(mode="json", by_alias=True)},'''
+new = '''        "response.incomplete" if incomplete else "response.completed",
+        {"response": final.model_dump(mode="json", by_alias=True)},'''
+test = '''tests/entrypoints/test_responses_api.py::test_an_incomplete_response_still_ends_with_response_completed'''
+
+[[mutation]]
+name = '''responses-max-output-tokens-is-clamped'''
+why = '''An over-budget max_output_tokens clamps into a 200, as upstream does, not a 400.'''
+file = '''pvllm/entrypoints/openai/responses/protocol.py'''
+old = '''            else min(self.max_output_tokens, default_max_tokens)'''
+new = '''            else (self.max_output_tokens or default_max_tokens)'''
+test = '''tests/entrypoints/test_responses_api.py::test_an_oversized_max_output_tokens_is_clamped_not_rejected'''
+
+[[mutation]]
+name = '''responses-text-format-is-flat'''
+why = '''text.format carries `schema` at the top level, not nested under `json_schema`.'''
+file = '''pvllm/entrypoints/openai/responses/protocol.py'''
+old = '''    if kind == "json_schema" and text_format.get("schema") is not None:'''
+new = '''    if kind == "json_schema" and text_format.get("json_schema") is not None:'''
+test = '''tests/entrypoints/test_responses_api.py::test_text_format_json_schema_uses_the_flat_responses_shape'''
+
+[[mutation]]
+name = '''responses-content-parts-are-resolved'''
+why = '''List-form input must resolve content parts to text, not stringify the part dicts.'''
+file = '''pvllm/entrypoints/openai/responses/serving.py'''
+old = '''        messages.extend(_normalise_input_items(request_input))'''
+new = '''        messages.extend(request_input)'''
+test = '''tests/entrypoints/test_responses_api.py::test_content_parts_are_resolved_to_their_text'''
+
+[[mutation]]
+name = '''responses-created-at-is-captured-once'''
+why = '''created_at is read before generation, so every event of a response agrees.'''
+file = '''pvllm/entrypoints/openai/responses/streaming.py'''
+old = '''    created_at = serving._created()'''
+new = '''    created_at = serving._created()
+    del created_at'''
+test = '''tests/entrypoints/test_responses_api.py::test_created_at_is_stable_across_a_streamed_response'''
+
+[[mutation]]
+name = '''engine-rejects-a-duplicate-request-id'''
+why = '''A duplicate id is refused before any state is touched; otherwise it tears down the request already running.'''
+file = '''pvllm/v1/engine/async_llm.py'''
+old = '''        if request_id in self._queues:'''
+new = '''        if False:'''
+test = '''tests/entrypoints/test_responses_api.py::test_the_engine_itself_rejects_a_duplicate_request_id'''
+
+[[mutation]]
+name = '''malformed-body-is-400-not-422'''
+why = '''FastAPI's 422 must be converted to a 400 in vLLM's envelope, on every endpoint.'''
+file = '''pvllm/entrypoints/openai/api_server.py'''
+old = '''    app.exception_handler(RequestValidationError)(validation_exception_handler)'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_a_malformed_request_is_400_in_the_vllm_envelope'''
+
+[[mutation]]
+name = '''unrouted-path-uses-the-envelope'''
+why = '''Starlette's bare detail body must be reshaped, or one route answers differently.'''
+file = '''pvllm/entrypoints/openai/api_server.py'''
+old = '''    app.exception_handler(HTTPException)(http_exception_handler)'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_an_unrouted_path_is_shaped_like_every_other_error'''
+
+[[mutation]]
+name = '''param-drops-pydantic-union-markers'''
+why = '''loc ('body','prompt','str') reports as body.prompt; `str` is pydantic's word, not a field.'''
+file = '''pvllm/entrypoints/serve/utils/server_utils.py'''
+old = '''    parts = [str(part) for part in loc if not _is_internal_loc_segment(str(part))]'''
+new = '''    parts = [str(part) for part in loc]'''
+test = '''tests/conformance/test_c5_to_c7.py::test_the_param_drops_pydantic_union_branch_markers'''
+
+[[mutation]]
+name = '''every-error-body-is-sanitised'''
+why = '''sanitize_message runs inside create_error_response, covering every error the server builds.'''
+file = '''pvllm/entrypoints/serve/utils/error_response.py'''
+old = '''                message=sanitize_message(message),'''
+new = '''                message=message,'''
+test = '''tests/conformance/test_c5_to_c7.py::test_every_error_body_is_sanitised_not_just_the_two_handlers'''
+
+[[mutation]]
+name = '''sanitize-keeps-the-model-name'''
+why = '''A model name looks like a path; over-stripping destroys the detail a 404 exists to report.'''
+file = '''pvllm/entrypoints/serve/utils/api_utils.py'''
+old = '''    message = re.sub(r"(?:/[\w\-]+)+/[\w\-]+\.\w+", "<path>", message)'''
+new = '''    message = re.sub(r"[\w\-]+/[\w\-.]+", "<path>", message)'''
+test = '''tests/conformance/test_c5_to_c7.py::test_every_error_body_is_sanitised_not_just_the_two_handlers'''
+
+[[mutation]]
+name = '''sanitize-strips-memory-addresses'''
+why = '''One of four rules; each is pinned separately because any one alone handles the obvious string.'''
+file = '''pvllm/entrypoints/serve/utils/api_utils.py'''
+old = '''    message = re.sub(r" at 0x[0-9a-f]+>", ">", message)
+'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_sanitize_message_strips_paths_and_addresses'''
+
+[[mutation]]
+name = '''sanitize-strips-traceback-frames'''
+why = '''The frame must be removed, not merely path-substituted.'''
+file = '''pvllm/entrypoints/serve/utils/api_utils.py'''
+old = '''    message = re.sub(r'\n?\s*File "[^"]+", line \d+, in \S+(\n\s+.*)?', "", message)
+'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_sanitize_message_strips_paths_and_addresses'''
+
+[[mutation]]
+name = '''sanitize-strips-prefixed-paths'''
+why = '''An extensionless /opt path is caught only by the prefix rule, not the generic one.'''
+file = '''pvllm/entrypoints/serve/utils/api_utils.py'''
+old = '''    message = re.sub(
+        r"/(?:home|usr|opt|var|tmp|root|lib|mnt|srv)(?:/[\w.\-]+)+", "<path>", message
+    )
+'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_sanitize_message_strips_paths_and_addresses'''
+
+[[mutation]]
+name = '''unmapped-exception-uses-the-envelope'''
+why = '''The Exception net is the registration that actually changes an outcome; without it Starlette answers text/plain.'''
+file = '''pvllm/entrypoints/openai/api_server.py'''
+old = '''    app.exception_handler(Exception)(exception_handler)'''
+new = ''''''
+test = '''tests/conformance/test_c5_to_c7.py::test_an_unmapped_exception_still_leaves_in_the_envelope'''
+
+[[mutation]]
+name = '''unsupported-modality-refused-without-an-image'''
+why = '''The refusal must fire before the image shortcut, or chat and responses disagree on identical content.'''
+file = '''pvllm/entrypoints/openai/multimodal.py'''
+old = '''    _reject_unsupported_parts(messages)'''
+new = ''''''
+test = '''tests/entrypoints/test_responses_api.py::test_chat_refuses_an_audio_part_the_same_way_this_endpoint_does'''
+
+[[mutation]]
+name = '''mid-stream-failure-emits-an-error-frame'''
+why = '''The 200 is already committed, so the wire is the only place left to report the failure.'''
+file = '''pvllm/entrypoints/openai/api_server.py'''
+old = '''        yield f"event: error\ndata: {body}\n\n"'''
+new = '''        pass'''
+test = '''tests/entrypoints/test_responses_api.py::test_a_mid_stream_failure_emits_a_terminal_error_event'''

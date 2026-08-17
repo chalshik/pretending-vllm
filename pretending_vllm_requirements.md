@@ -640,6 +640,7 @@ max_concurrency    = num_gpu_blocks * block_size / max_model_len
 * R21.4. HTTP contract tests against real vLLM where a CPU build is feasible, otherwise against
   recorded responses.
 * R21.5. Whole suite under 30 seconds on a laptop with the constant cost model.
+* R21.6. A mutation catalogue (`tests/mutations.toml`, run by `tools/mutate.py`). Each entry names a guarantee, the minimal edit that breaks it, and the test that should notice; the tool asserts that test FAILS under the edit. A green suite says the tests pass, not that they would fail if the code were wrong — and on this project the gap has been real: mutation testing has found a non-discriminating test nearly every time it was run. Enforced in CI so it is no longer something someone remembers to do.
 
 ## 7. Core data structures
 

@@ -64,6 +64,13 @@ jobs:
       - name: Test
         run: uv run pytest -q --durations=10
 
+      # R21.6: a green suite says the tests pass, not that they would fail if the
+      # code were wrong. Every entry breaks a named guarantee and asserts the test
+      # that claims to guard it notices. Runs after the suite because a genuine
+      # failure above would make every entry "caught" for the wrong reason.
+      - name: Mutation catalogue
+        run: uv run python tools/mutate.py
+
       # Redundant with tests/conformance/ by design. The suite compares a fresh
       # recording to the goldens; this asserts the *tool* that writes them still
       # produces what is checked in, so a broken recorder cannot quietly make
