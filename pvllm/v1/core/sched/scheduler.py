@@ -743,7 +743,6 @@ class Scheduler:
 
         outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
         still_running: list[Request] = []
-        num_invalid_spec_tokens: dict[str, int] = {}
 
         for request in self.running:
             req_id = request.request_id
@@ -774,7 +773,6 @@ class Scheduler:
                 rejected = num_drafts - max(0, len(generated) - 1)
                 if rejected > 0:
                     request.num_computed_tokens -= rejected
-                    num_invalid_spec_tokens[req_id] = rejected
 
             new_token_ids: list[int] = []
             stopped = False

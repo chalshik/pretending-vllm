@@ -237,6 +237,13 @@ class RooflineCostModel(CostModel):
         # latency, less memory per device" -- correct for a single request and
         # pessimistic for a saturated one.
         self.layers_local = model.num_hidden_layers
+        #: Layers on the single simulated rank. A *step* traverses every stage, so
+        #: `layers_local` above is right for latency -- but a per-device startup cost
+        #: is not a traversal, and this is the count for those. `compute_memory_profile`
+        #: and `SimWorker._weight_bytes` both divide the same way; graph capture did
+        #: not, and was charged `pp_size` times too much until M9's review caught it.
+        #: Ceiling, not floor: the busiest stage is the one that has to be buildable.
+        self.layers_per_stage = max(1, -(-model.num_hidden_layers // pp_size))
 
         from pvllm.sim.memory import compute_weight_bytes
 
@@ -388,10 +395,17 @@ class RooflineCostModel(CostModel):
         return weight_bytes / self.device.load_bandwidth
 
     def graph_capture_seconds(self, num_shapes: int) -> float:
-        """R8.4. Capture replays each shape a few times; cost scales with depth."""
+        """R8.4. Capture replays each shape a few times; cost scales with depth.
+
+        Depth *on this device*, so `layers_per_stage`. Capture is startup work done by
+        one rank over the layers that rank holds -- not a traversal of the pipeline
+        the way a step is. Using the whole-model count charged an 8-stage deployment
+        eight times its real capture time, and startup time is what an autoscaler's
+        cold-start budget is set from.
+        """
         if self.enforce_eager:
             return 0.0
-        return num_shapes * self.layers_local * self.device.launch_overhead * 50
+        return num_shapes * self.layers_per_stage * self.device.launch_overhead * 50
 
 
 def build_cost_model(

@@ -7,15 +7,32 @@ adversarial reviews -- a load-balancer rotation that rotated nothing anyone read
 a background-task registry, and four exception registrations that duplicated a
 try/except already in the route.
 
-They share a shape an AST can see: a name is *written* and never *read*. That is what
-this checks -- every `self.X = ...` in `pvllm/`, against every `.X` read anywhere in
-the package, its tests, and its tools.
+**This catches ONE of those six.** An earlier version of this docstring said the six
+"share a shape an AST can see", and that was written without checking. Retro-tested,
+one at a time:
 
-It is deliberately narrow. Broadening it to pydantic fields would drown the signal,
-because serialisation reads those implicitly and several are declared precisely so a
-key appears on the wire. Narrow and true beats wide and ignored: the first run of this
-check found four real inert mechanisms, two of them carrying comments claiming they
-fed metrics that do not exist.
+* the load-balancer rotation wrote `self.scan_start`, a name that *is* read elsewhere
+  -- a redundant write to a live name is invisible here;
+* the "padding added" warning was a local in a module-level function, not `self.X`;
+* the drain tail was a method nobody called;
+* `self.lockstep_rounds` -- **caught**, the only one;
+* `self.background_tasks` was read via `.get()`, so the name looked live while the
+  dict stayed permanently empty (fixed in the M9 review, along with this claim);
+* the four duplicate exception registrations were calls, not attributes.
+
+So this checks one narrow shape: every `self.X = ...` in `pvllm/`, against every `.X`
+read in the package, its tests and its tools. Two further limits, stated here rather
+than left to be discovered. `read` is a flat set of attribute *names* carrying no type
+information, so an inert `self.name` or `self.config` is invisible whenever anything
+anywhere reads a field of that name -- about 1,500 names are live against 336 written,
+so an ordinary name is effectively exempt. And module constants, dataclass and pydantic
+fields, unused parameters and uncalled methods are all outside it by construction.
+
+Narrow is deliberate: widening to pydantic fields would drown the signal, since
+serialisation reads those implicitly and several exist precisely so a key appears on
+the wire. But narrow is not general, and this file used to imply it was. What it is
+worth is measurable -- its first run found five real inert mechanisms, two of them
+carrying comments claiming they fed metrics that were never built.
 
 An entry in ALLOWED needs a reason, and the reason has to survive being read aloud.
 "Somebody might want it later" is how the six got there.

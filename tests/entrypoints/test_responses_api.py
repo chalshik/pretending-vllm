@@ -737,17 +737,42 @@ async def test_an_image_part_is_refused_rather_than_stringified(client):
 # --- created_at -------------------------------------------------------------
 
 
-async def test_created_at_is_stable_across_a_streamed_response(client):
-    """Read once, before generation. Reading the engine clock per event gave one
-    response two different `created_at` values, because the sim clock advances while
-    the model runs."""
+async def test_created_at_is_stable_across_a_streamed_response(client, monkeypatch):
+    """Read once, before generation, and shared by every event of the response.
+
+    Asserting on the wire value alone cannot catch this. `_created()` truncates the
+    sim clock to a whole second, and an 8-token stream advances it by about 8 ms, so
+    a clock read per event collapses to the same integer and the naive version of
+    this test passed under the very regression it was written for -- verified by
+    reintroducing it and watching all 1079 tests stay green.
+
+    So this counts the reads instead. One response, one clock read: that is the
+    property, and it holds no matter how fast the clock moves.
+    """
+    from pvllm.entrypoints.openai.responses.serving import OpenAIServingResponses
+
+    reads = 0
+    original = OpenAIServingResponses._created
+
+    def counting_created(self):
+        nonlocal reads
+        reads += 1
+        return original(self)
+
+    monkeypatch.setattr(OpenAIServingResponses, "_created", counting_created)
+
     response = await client.post(
         "/v1/responses",
         json={"model": MODEL, "input": "hi", "stream": True, "max_output_tokens": 8},
     )
+    frames = sse_frames(response.text)
+    assert len(frames) > 3, "not enough frames to distinguish one read from many"
+    assert reads == 1, f"the clock was read {reads} times for one response"
+
+    # And the value really is shared, which is what a client sees.
     stamps = {
         payload["response"]["created_at"]
-        for _, payload in sse_frames(response.text)
+        for _, payload in frames
         if "response" in payload
     }
     assert len(stamps) == 1

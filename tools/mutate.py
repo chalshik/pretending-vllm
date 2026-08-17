@@ -71,22 +71,44 @@ def _targets_are_unmodified(mutations: list[Mutation]) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def _run_test(node_id: str) -> subprocess.CompletedProcess[str]:
+    """One pytest invocation, used for both the baseline and the mutated run.
+
+    Shared so the two are identical in every respect but the state of the source --
+    a baseline run with different flags would be comparing two different things.
+    """
+    return subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", node_id, "-q", "--no-header"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+
+
 def _invalidate_bytecode(target: Path) -> None:
     """Drop any cached bytecode for `target`.
 
     Load-bearing, and the reason is nastier than it looks. CPython decides a `.pyc` is
     current by comparing the source's *mtime and size* against the values in the pyc
     header. A mutation like `sequence += 1` -> `sequence += 0` changes neither size nor
-    -- within one filesystem tick -- mtime. So without this:
+    -- within one filesystem tick -- mtime. Two distinct failures follow, and they
+    point in OPPOSITE directions:
 
-      * the mutated run can load the ORIGINAL bytecode, meaning the mutation never
-        takes effect and the entry reports a catch it never earned; and
-      * the restore can be equally invisible, leaving stale mutated bytecode behind to
-        fail unrelated test runs long afterwards.
+      * the mutated run loads the ORIGINAL bytecode, so the mutation never executes,
+        the test passes, and the entry is reported as a MISS it did not deserve --
+        noisy and self-correcting, because someone investigates a miss; and
+      * the restore is equally invisible, leaving mutated bytecode live in
+        `__pycache__` with an innocent source on disk, so a LATER unrelated run fails
+        -- and that is the one that manufactures a false catch.
+
+    An earlier version of this docstring had the first bullet producing the false
+    catch. It cannot: a mutation that does not execute leaves the test green, and
+    `run_one` classifies exit 0 as a miss unconditionally.
 
     Both were observed. The second is how it was found: a comment-only edit to an
     unrelated file "caught" a mutation, because a same-size edit from an earlier run
-    was still live in `__pycache__` with the source on disk innocent.
+    was still live in `__pycache__`.
     """
     cache = target.parent / "__pycache__"
     if not cache.is_dir():
@@ -111,19 +133,22 @@ def run_one(mutation: Mutation, *, verbose: bool = False) -> tuple[bool, str]:
     if occurrences > 1:
         return False, f"anchor appears {occurrences} times -- make it unique"
 
+    # The baseline. Without it the tool has no evidence that the failure it is about
+    # to see was *caused* by the mutation -- only that the test is red while the
+    # mutation is applied. An already-broken test would certify every entry naming it,
+    # which is the exact opposite of what the tool is for, and the workflow this
+    # module's own guard recommends (running while a test is being edited) is where
+    # that bites. Cheap insurance: one extra run per entry.
+    baseline = _run_test(mutation.test)
+    if baseline.returncode != 0:
+        if "no tests ran" in baseline.stdout or baseline.returncode in (4, 5):
+            return False, "the named test does not exist"
+        return False, "the named test ALREADY fails before the mutation is applied"
+
     try:
         target.write_text(original.replace(mutation.old, mutation.new, 1))
         _invalidate_bytecode(target)
-        result = subprocess.run(
-            [sys.executable, "-B", "-m", "pytest", mutation.test, "-q", "--no-header"],
-            cwd=REPO,
-            capture_output=True,
-            text=True,
-            # `-B` above stops the child writing bytecode; this stops anything it
-            # spawns from writing it either. Between them, no mutated `.pyc` is ever
-            # persisted for a later run to pick up.
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-        )
+        result = _run_test(mutation.test)
     finally:
         target.write_text(original)
         _invalidate_bytecode(target)

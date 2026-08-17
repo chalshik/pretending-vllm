@@ -149,6 +149,12 @@ class SchedulerOutput:
     preempted_req_ids: set[str] | None = None
     has_structured_output_requests: bool = False
     pending_structured_output_tokens: bool = False
+    #: Declared for upstream parity (F7) and never populated here. Upstream carries
+    #: the previous step's rejected drafts forward on this field; pvllm rolls the
+    #: rejection off `num_computed_tokens` in `update_from_output` and reports the
+    #: totals through `vllm:spec_decode_*`, so nothing reads a per-request copy. Left
+    #: declared because the field set is the contract; left `None` because inventing
+    #: a value nothing consumes is how the last one became an inert mechanism.
     num_invalid_spec_tokens: dict[str, int] | None = None
     structured_output_request_ids: dict[str, int] = field(default_factory=dict)
     grammar_bitmask: npt.NDArray[np.int32] | None = None

@@ -113,11 +113,12 @@ test = '''tests/entrypoints/test_responses_api.py::test_content_parts_are_resolv
 
 [[mutation]]
 name = '''responses-created-at-is-captured-once'''
-why = '''created_at is read before generation, so every event of a response agrees.'''
+why = '''created_at is read once, before generation; the terminal event must not re-read the clock.'''
 file = '''pvllm/entrypoints/openai/responses/streaming.py'''
-old = '''    created_at = serving._created()'''
-new = '''    created_at = serving._created()
-    del created_at'''
+old = '''        created_at=created_at,
+        output=final_output,'''
+new = '''        created_at=serving._created(),
+        output=final_output,'''
 test = '''tests/entrypoints/test_responses_api.py::test_created_at_is_stable_across_a_streamed_response'''
 
 [[mutation]]

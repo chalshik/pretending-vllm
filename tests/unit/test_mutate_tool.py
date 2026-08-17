@@ -114,6 +114,34 @@ def test_a_missing_test_is_not_mistaken_for_a_catch(probe):
     assert "does not exist" in detail
 
 
+def test_an_already_failing_test_is_not_mistaken_for_a_catch(probe, tmp_path):
+    """Without a baseline the tool has no evidence the failure it saw was *caused* by
+    the mutation -- only that the test was red while the mutation was applied.
+
+    That is not hypothetical: this module's own dirty-tree guard deliberately permits
+    running while a test file is being edited, on the grounds that this is exactly
+    when you want to ask whether the test guards anything. A half-written test would
+    then have every entry naming it certified as coverage.
+    """
+    probe.write_text("VALUE = 1\n")
+    failing = mutate.REPO / "tests" / "unit" / "test_mutate_probe_failing.py"
+    failing.write_text("def test_always_fails():\n    assert False\n")
+    try:
+        entry = mutate.Mutation(
+            name="probe",
+            why="...",
+            file="pvllm/_mutate_probe.py",
+            old="VALUE = 1",
+            new="VALUE = 2",
+            test=("tests/unit/test_mutate_probe_failing.py::test_always_fails"),
+        )
+        caught, detail = mutate.run_one(entry)
+        assert not caught
+        assert "ALREADY fails" in detail
+    finally:
+        failing.unlink(missing_ok=True)
+
+
 def test_the_source_is_restored_even_when_the_test_fails(probe):
     """The edit is undone in a `finally`, so a failing run does not leave the tree
     mutated -- which is how a mutation could otherwise end up committed."""

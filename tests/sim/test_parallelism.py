@@ -156,6 +156,44 @@ def test_pipeline_parallelism_does_not_speed_up_a_step():
     assert four.comm_seconds < cost(tp=4, tokens=8, reqs=8, context=512).comm_seconds
 
 
+def test_graph_capture_is_per_device_so_it_does_shrink_with_pipeline_stages():
+    """The counterpart to the test above, and the distinction that was missed.
+
+    A *step* traverses every stage, so it does not shrink with `pp_size`. Graph
+    capture is not a traversal: it is startup work one rank does over the layers that
+    rank holds, and every other per-device term -- weight bytes, the KV pool, the
+    activation peak -- already divides. Capture did not, so an 8-stage deployment was
+    charged eight times its real capture time, and startup time is exactly what a
+    cold-start budget is set from.
+
+    The bug hid behind an unused `layers_per_stage` variable. It was deleted as dead
+    code in M9b; the deletion was the wrong half of the fix, since the variable was
+    evidence of a division that should have been happening.
+    """
+    from pvllm.sim.cost_model import build_cost_model
+    from pvllm.sim.hardware_db import load_device_card
+    from pvllm.sim.model_db import load_model_card
+
+    def capture(pp: int) -> float:
+        model = load_model_card("dense-8b")
+        return build_cost_model(
+            "roofline",
+            model,
+            load_device_card("datacenter-80gb"),
+            dtype="bfloat16",
+            kv_cache_dtype="bfloat16",
+            pp_size=pp,
+        ).graph_capture_seconds(10)
+
+    assert capture(2) == pytest.approx(capture(1) / 2)
+    assert capture(4) == pytest.approx(capture(1) / 4)
+    # And a step over the same model does *not* move, which is the pair that makes
+    # the point: these are different quantities, not one quantity measured twice.
+    assert cost(pp=4, tokens=8, reqs=8, context=512).compute_seconds == pytest.approx(
+        cost(pp=1, tokens=8, reqs=8, context=512).compute_seconds
+    )
+
+
 def test_pipeline_hand_offs_cost_less_than_tensor_all_reduces():
     """Which is why pipeline parallelism is what crosses a slow link."""
     tensor = cost(tp=4, tokens=64, reqs=8, context=512).comm_seconds

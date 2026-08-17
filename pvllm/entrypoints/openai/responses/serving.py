@@ -208,7 +208,6 @@ class OpenAIServingResponses:
         self.response_store: dict[str, ResponsesResponse] = {}
         self.response_store_lock = asyncio.Lock()
         self.msg_store: dict[str, list[dict[str, Any]]] = {}
-        self.background_tasks: dict[str, asyncio.Task[Any]] = {}
 
     # --- ids and time --------------------------------------------------------
 
@@ -586,9 +585,12 @@ class OpenAIServingResponses:
             response.status = "cancelled"
             self.response_store[response_id] = response
 
-        task = self.background_tasks.get(response_id)
-        if task is not None and not task.done():
-            task.cancel()
+        # No background task to cancel: `background=True` is refused outright, so
+        # the only thing a cancel can act on is the in-flight engine request. The
+        # `background_tasks` dict that used to be consulted here was permanently
+        # empty -- nothing ever assigned into it -- which made these lines
+        # unreachable and invisible to the inert lint, because `.get` counts as a
+        # read of the name.
         await self.engine.abort(response_id)
         return response
 
