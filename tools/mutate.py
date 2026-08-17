@@ -125,6 +125,21 @@ def run_one(mutation: Mutation, *, verbose: bool = False) -> tuple[bool, str]:
     silently pinning nothing.
     """
     target = REPO / mutation.file
+
+    # The guard lives here, not only in `main()`. `run_one` is called directly by the
+    # tool's own tests, so an ordinary `pytest -q` rewrites a tracked source file and
+    # restores it from an in-memory string -- on a tree that may hold uncommitted work
+    # in exactly that file. M9a already lost an afternoon to mutations left in tracked
+    # sources; the recovery for a skipped restore is `git checkout <file>`, which would
+    # take the developer's edits with it.
+    if (
+        subprocess.run(
+            ["git", "diff", "--quiet", "--", mutation.file], cwd=REPO
+        ).returncode
+        != 0
+    ):
+        return False, f"{mutation.file} has uncommitted changes; refusing to mutate it"
+
     original = target.read_text()
 
     occurrences = original.count(mutation.old)

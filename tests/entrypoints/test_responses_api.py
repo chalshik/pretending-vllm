@@ -821,10 +821,34 @@ async def test_the_engine_itself_rejects_a_duplicate_request_id(client):
     first = engine.generate("hello", params, "dup-engine-id")
     await first.__anext__()
     try:
-        with pytest.raises(ValueError, match="already in flight"):
+        # Deliberately not matched on the message. Remove the guard and a duplicate is
+        # *still* refused, one layer down by the engine core, with different wording --
+        # so a `match=` here fails for the wording and never reaches the assertions
+        # below, which are the ones that describe the actual guarantee.
+        with pytest.raises(ValueError):
             await engine.generate("hello", params, "dup-engine-id").__anext__()
+
+        # What actually breaks without the guard is the ordering:
+        # the queue is rebound before that rejection, so the failing call's cleanup
+        # tears down the request already running and the output handler dies with it.
+        # These are the assertions that see that.
+        assert "dup-engine-id" in engine.in_flight_request_ids, (
+            "the running request lost its registration to the duplicate"
+        )
+        assert await first.__anext__(), "the first request stopped producing output"
+        handler = engine._output_handler
+        assert handler is not None and not handler.done(), (
+            "the output handler died, which takes every later request with it"
+        )
     finally:
         await first.aclose()
+
+    # And the engine still serves afterwards, on a fresh id.
+    fresh = engine.generate("hello again", params, "after-the-duplicate")
+    try:
+        assert await fresh.__anext__()
+    finally:
+        await fresh.aclose()
 
 
 # --- the store, in both positions -------------------------------------------

@@ -67,10 +67,6 @@ ALLOWED: dict[str, str] = {
 }
 
 
-def _module_files() -> list[Path]:
-    return sorted(PACKAGE.rglob("*.py"))
-
-
 def _collect() -> tuple[dict[str, list[tuple[Path, int]]], set[str]]:
     written: dict[str, list[tuple[Path, int]]] = {}
     read: set[str] = set()
