@@ -131,6 +131,16 @@ def build_multimodal_prompt(
     out far below what the same workload gets on real vLLM. That hit rate is the
     headline number this simulator exists to produce.
     """
+    # Validate part types *before* the image shortcut. The shortcut is a performance
+    # path -- a text-only conversation should not pay for placeholder machinery -- but
+    # taking it first made the audio and video refusals in `parse_content` unreachable
+    # for any message that carried no image. An `input_audio` part then fell through
+    # to `apply_chat_template`, which stringified the part dict into the prompt: 200
+    # OK, an invented caption, and a wrong token count. `/v1/responses` refuses the
+    # same part by name, so the two endpoints answered the identical content
+    # differently, and the refusal there points clients *here*.
+    _reject_unsupported_parts(messages)
+
     if not _has_image(messages):
         return None, []
 
@@ -205,6 +215,35 @@ def build_multimodal_prompt(
     if add_generation_prompt:
         token_ids.extend(tokenizer.encode("<|assistant|>\n", add_special_tokens=False))
     return token_ids, features
+
+
+def _reject_unsupported_parts(messages: list[dict[str, Any]]) -> None:
+    """Refuse a modality this build does not model, wherever it appears.
+
+    Same two errors `parse_content` raises, hoisted so they fire whether or not the
+    message also carries an image.
+    """
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            kind = part.get("type")
+            if kind in ("text", "image_url"):
+                continue
+            if kind in _KNOWN_PART_TYPES:
+                raise NotImplementedError(
+                    f"content parts of type {kind!r} are not implemented; only 'text' "
+                    f"and 'image_url' are. Audio and video would need their own token "
+                    f"counts and encoder costs, and inventing those would produce "
+                    f"plausible scheduling behaviour for a modality nobody modeled."
+                )
+            raise ValueError(
+                f"unknown content part type {kind!r}; expected one of "
+                f"{list(_KNOWN_PART_TYPES)}"
+            )
 
 
 def _has_image(messages: list[dict[str, Any]]) -> bool:

@@ -325,6 +325,105 @@ async def test_a_validation_message_is_the_compact_error_list(client):
     assert "pydantic.dev" not in message
 
 
+async def test_every_error_body_is_sanitised_not_just_the_two_handlers(client):
+    """Upstream sanitises inside `create_error_response`, so it covers every error the
+    server builds. Wiring it into the two exception handlers only left it inert for
+    exactly the messages it was written for: those built from an arbitrary exception's
+    `str`, which is what `to_error_response` does four times over.
+    """
+    from pvllm.entrypoints.serve.utils.error_response import (
+        as_dict,
+        create_error_response,
+        model_not_found,
+        not_implemented,
+        to_error_response,
+    )
+
+    dirty = "boom /opt/pvllm/engine.py <obj at 0x7f9a1b2c3d4e>"
+    for label, response in [
+        ("create_error_response", create_error_response(dirty)),
+        ("not_implemented", not_implemented(dirty)),
+        ("to_error_response", to_error_response(ValueError(dirty))),
+        ("to_error_response/500", to_error_response(KeyError(dirty))),
+    ]:
+        message = as_dict(response)["error"]["message"]
+        assert "/opt/" not in message, f"{label} leaked a path: {message}"
+        assert "0x7f9a" not in message, f"{label} leaked an address: {message}"
+
+    # And the model name in a 404 survives sanitising -- a model name looks like a
+    # path, so over-stripping here would destroy the one detail the error exists to
+    # report.
+    body = as_dict(model_not_found("meta-llama/Llama-3.1-8B", ["a", "b"]))
+    assert "meta-llama/Llama-3.1-8B" in body["error"]["message"]
+
+
+async def test_an_unmapped_exception_still_leaves_in_the_envelope(client):
+    """Upstream registers `app.exception_handler(Exception)` last, as the net. Without
+    it a KeyError out of a route with no try/except of its own escapes to Starlette
+    and is answered as bare `text/plain` "Internal Server Error" -- the one shape the
+    envelope work exists to abolish.
+
+    Driven through a transport that does not re-raise: Starlette's
+    `ServerErrorMiddleware` returns the handler's response *and* re-raises so the
+    server can log the fault, and the default ASGI transport surfaces that raise
+    instead of the response.
+    """
+    app = client._transport.app
+
+    @app.get("/_test_boom")
+    async def boom():
+        raise KeyError("unmapped")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as probe:
+        response = await probe.get("/_test_boom")
+
+    assert response.status_code == 500
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert "detail" not in body
+    assert body["error"]["type"] == "InternalServerError"
+    assert body["error"]["code"] == 500
+
+
+async def test_str_of_a_validation_error_really_does_leak_the_endpoint_path():
+    """The reason `validation_exception_handler` must build its message from
+    `errors()`. Pinned as a test because the docstring asserting it was once softened
+    to the opposite, on the strength of a toy app whose endpoint was a module-level
+    function -- where the leak genuinely does not appear.
+    """
+    from fastapi import FastAPI
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+
+    from pvllm.entrypoints.openai.completion.protocol import CompletionRequest
+
+    captured: dict[str, str] = {}
+    app = FastAPI()
+
+    @app.exception_handler(RequestValidationError)
+    async def handler(request, exc):
+        captured["str"] = str(exc)
+        return JSONResponse({"ok": True})
+
+    def build() -> None:
+        # Defined in a closure, exactly as pvllm's routes are inside `build_app`.
+        @app.post("/x")
+        async def x(body: CompletionRequest):
+            return {}
+
+    build()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as probe:
+        await probe.post("/x", json={"model": "m"})
+
+    assert 'File "' in captured["str"]
+    assert ".py" in captured["str"]
+
+
 def test_sanitize_message_strips_paths_and_addresses():
     """Tested directly, because on the happy path the message never contains one --
     so a wire-level assertion passes whether or not this function does anything.

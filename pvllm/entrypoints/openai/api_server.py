@@ -147,9 +147,20 @@ async def convert_stream_to_sse_events(
     `data: [DONE]` -- the stream ends after `response.completed`. Chat completions
     sends the sentinel; this does not, and a client that waits for one waits forever.
     """
-    async for event in generator:
-        payload = json.dumps(event["payload"], separators=(",", ":"))
-        yield f"event: {event['type']}\ndata: {payload}\n\n"
+    try:
+        async for event in generator:
+            payload = json.dumps(event["payload"], separators=(",", ":"))
+            yield f"event: {event['type']}\ndata: {payload}\n\n"
+    except Exception as exc:
+        # The 200 was committed with the first frame, so no exception handler can
+        # change the status now -- the only honest thing left is to say so on the
+        # wire. Without this the body simply stopped, and because this endpoint
+        # deliberately sends no `[DONE]`, the absence of `response.completed` was the
+        # *only* signal: a client on a chunked connection could not tell a crash from
+        # a normal end. Upstream emits an error event for the same class of failure.
+        logger.exception("Error while streaming a response")
+        body = bytes(to_error_response(exc).body).decode()
+        yield f"event: error\ndata: {body}\n\n"
 
 
 def build_app(
@@ -185,6 +196,13 @@ def build_app(
     app.exception_handler(TypeError)(exception_handler)
     app.exception_handler(OverflowError)(exception_handler)
     app.exception_handler(NotImplementedError)(exception_handler)
+    # The safety net, and the registration that actually changes an outcome. The four
+    # above are near-inert: every route that can raise them already wraps its body in
+    # `except Exception: return to_error_response(exc)`, which is the same function.
+    # This one catches what those do not -- a KeyError out of `/tokenize`, an
+    # AttributeError out of `/v1/models` -- which otherwise leaves as Starlette's bare
+    # `text/plain` "Internal Server Error", the one shape this module exists to abolish.
+    app.exception_handler(Exception)(exception_handler)
 
     state = ServerState(vllm_config, registry)
     app.state.server = state

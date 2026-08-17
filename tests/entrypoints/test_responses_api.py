@@ -669,6 +669,50 @@ async def test_content_parts_are_resolved_to_their_text(client):
     )
 
 
+async def test_chat_refuses_an_audio_part_the_same_way_this_endpoint_does(client):
+    """The consistency the refusal here depends on. `/v1/responses` refuses an audio
+    part and tells the client to use `/v1/chat/completions` for other modalities --
+    which was a lie while chat's own refusal sat behind an image-presence gate:
+    `build_multimodal_prompt` short-circuited on a message with no image, so the audio
+    part fell through to the chat template and was stringified into the prompt.
+    Identical content, two endpoints, 501 and 200.
+    """
+    audio_part = {
+        "type": "input_audio",
+        "input_audio": {"data": "AAAA", "format": "wav"},
+    }
+    chat = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": [audio_part]}],
+            "max_tokens": 2,
+        },
+    )
+    assert chat.status_code == 501
+    assert chat.json()["error"]["type"] == "NotImplementedError"
+
+
+async def test_a_mid_stream_failure_emits_a_terminal_error_event(client):
+    """The 200 is committed with the first frame, so no exception handler can change
+    the status -- the only honest thing left is to say so on the wire. Without this
+    the body just stopped, and since this endpoint deliberately sends no `[DONE]`, the
+    absence of `response.completed` was the only signal a client had.
+    """
+    from pvllm.entrypoints.openai import api_server
+
+    async def exploding(*args, **kwargs):
+        yield {"type": "response.created", "payload": {"sequence_number": 0}}
+        raise RuntimeError("engine died mid-stream")
+
+    frames = [
+        chunk async for chunk in api_server.convert_stream_to_sse_events(exploding())
+    ]
+    assert frames[0].startswith("event: response.created")
+    assert frames[-1].startswith("event: error")
+    assert "InternalServerError" in frames[-1]
+
+
 async def test_an_image_part_is_refused_rather_than_stringified(client):
     """`/v1/responses` does not reach pvllm's multimodal path, so rendering an image
     part as text would invent a caption and report a token count for it."""

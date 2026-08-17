@@ -29,6 +29,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException
 
+from pvllm.entrypoints.serve.utils.api_utils import sanitize_message
 from pvllm.entrypoints.serve.utils.error_response import (
     ErrorInfo,
     ErrorResponse,
@@ -78,21 +79,6 @@ _INTERNAL_LOC_MARKERS = frozenset(
 )
 
 
-def sanitize_message(message: str) -> str:
-    """Strip memory addresses, tracebacks and file paths out of an error message.
-
-    Not cosmetic: an error body is returned to whoever called the endpoint, and the
-    unsanitised form leaks the server's filesystem layout.
-    """
-    message = re.sub(r" at 0x[0-9a-f]+>", ">", message)
-    message = re.sub(r'\n?\s*File "[^"]+", line \d+, in \S+(\n\s+.*)?', "", message)
-    message = re.sub(
-        r"/(?:home|usr|opt|var|tmp|root|lib|mnt|srv)(?:/[\w.\-]+)+", "<path>", message
-    )
-    message = re.sub(r"(?:/[\w\-]+)+/[\w\-]+\.\w+", "<path>", message)
-    return message.strip()
-
-
 def _is_internal_loc_segment(segment: str) -> bool:
     if _BRACKETED_INTERNAL_RE.search(segment):
         return True
@@ -117,13 +103,19 @@ async def validation_exception_handler(
 ) -> JSONResponse:
     """A malformed body is a 400 in vLLM's envelope, not FastAPI's 422.
 
-    The message is rebuilt from `exc.errors()` rather than `str(exc)`, which is what
-    upstream does and why: it notes that `str(exc)` can carry FastAPI's endpoint
-    context and with it the server's file path. That leak does not reproduce on the
-    pydantic pinned here -- `str(exc)` is the same compact error list -- so this
-    follows upstream for the shape of the message rather than because the hazard was
-    observed. `sanitize_message` is the part that actually removes paths, and it is
-    exercised directly in the tests.
+    **The message must be rebuilt from `exc.errors()`, never from `str(exc)`.** On the
+    pinned stack (fastapi 0.141.1, pydantic 2.13.4) `str(exc)` appends FastAPI's
+    endpoint context, which for a route defined as a closure inside `build_app` -- as
+    every route here is -- includes the absolute source path, the line number and the
+    function name:
+
+        File "/…/pvllm/entrypoints/openai/api_server.py", line 202, in create_completion
+
+    An earlier version of this docstring claimed that leak "does not reproduce on the
+    pydantic pinned here". It was checked against a toy app whose endpoint was a
+    module-level function, where it does not; against this app it does. Simplifying
+    the construction below back to `str(exc)` reintroduces an absolute-path disclosure
+    on every malformed body, on every endpoint.
     """
     assert isinstance(exc, RequestValidationError)
     param: str | None = None

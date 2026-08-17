@@ -16,6 +16,8 @@ from typing import Any
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from pvllm.entrypoints.serve.utils.api_utils import sanitize_message
+
 
 class ErrorInfo(BaseModel):
     message: str
@@ -34,11 +36,21 @@ def create_error_response(
     status_code: HTTPStatus = HTTPStatus.BAD_REQUEST,
     param: str | None = None,
 ) -> JSONResponse:
+    """Every error body the server builds passes through here -- and therefore through
+    `sanitize_message`, as upstream does it.
+
+    Sanitising at this choke point rather than at the handlers is the whole point.
+    `to_error_response` feeds this `str(exc)` four times over, and an arbitrary
+    exception's `str` is precisely the message that carries a traceback frame or an
+    absolute path. Wiring the sanitiser into the two exception handlers only, as M8
+    first did, left it inert for every error raised inside handler code -- which is
+    most of them.
+    """
     return JSONResponse(
         status_code=status_code.value,
         content=ErrorResponse(
             error=ErrorInfo(
-                message=message,
+                message=sanitize_message(message),
                 type=err_type,
                 param=param,
                 code=status_code.value,
@@ -63,9 +75,13 @@ def not_implemented(message: str, param: str | None = None) -> JSONResponse:
     """A feature this build does not model, refused by name. C7.
 
     One helper so that a refusal *returned* from a handler and a `NotImplementedError`
-    *raised* from one produce the same status. They used to disagree -- 400 from the
-    former, 501 from the latter -- which is the sort of split a client discovers by
-    getting two different answers to the same mistake.
+    *raised* from one produce the same status, and so that moving that status again
+    means editing one line rather than ten call sites.
+
+    An earlier version of this docstring said the two paths "used to disagree -- 400
+    from the former, 501 from the latter". They did not: before M8 both were 400, and
+    501 appears nowhere earlier in the history. The helper unifies them at a *new*
+    status; it did not repair a split.
     """
     return create_error_response(
         message,
