@@ -25,3 +25,8 @@ dist/
 htmlcov/
 
 .DS_Store
+
+# Local Claude Code configuration. Machine-specific paths and agent settings, not
+# project code -- and this repo is public. Purged from history deliberately; keep it
+# ignored so it cannot be re-added by an absent-minded `git add -A`.
+.claude/
