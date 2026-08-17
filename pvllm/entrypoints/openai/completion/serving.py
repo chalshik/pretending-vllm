@@ -37,6 +37,7 @@ from pvllm.entrypoints.openai.completion.protocol import (
 from pvllm.entrypoints.serve.utils.error_response import (
     create_error_response,
     model_not_found,
+    not_implemented,
     to_error_response,
 )
 from pvllm.logger import init_logger
@@ -94,9 +95,8 @@ class OpenAIServingCompletion:
         elif all(isinstance(item, int) for item in request.prompt):
             prompt = [int(item) for item in request.prompt]  # type: ignore[arg-type]
         else:
-            return create_error_response(
+            return not_implemented(
                 "Batched prompts are not supported; send one prompt per request.",
-                err_type="NotImplementedError",
                 param="prompt",
             )
 

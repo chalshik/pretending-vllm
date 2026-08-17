@@ -240,7 +240,7 @@ when hardware time becomes available. Read this section as design intent, not as
 | C2 | KV block allocation and free order |
 | C3 | Prefix cache hit rate and block hash values |
 | C4 | Preemption count and victim selection |
-| C5 | OpenAI HTTP request and response schema for implemented endpoints |
+| C5 | OpenAI HTTP request and response schema for implemented endpoints, errors included: a malformed body is a **400** in vLLM's `{"error": {...}}` envelope, not FastAPI's 422 `{"detail": [...]}`, and an unmodelled feature is a **501** naming it |
 | C6 | Prometheus metric names, types, labels, and histogram bucket edges |
 | C7 | Error codes and failure modes at capacity |
 

@@ -59,19 +59,45 @@ def model_not_found(model: str, served: list[str]) -> JSONResponse:
     )
 
 
-def to_error_response(exc: Exception) -> JSONResponse:
-    """Map an engine exception onto the right status.
+def not_implemented(message: str, param: str | None = None) -> JSONResponse:
+    """A feature this build does not model, refused by name. C7.
 
-    `NotImplementedError` becomes a 400 rather than a 500 on purpose: it means the
-    client asked for a feature this build does not model, which is a problem with the
-    request, not with the server. Reporting 500 would send a client into retry
-    logic for something that will never succeed.
+    One helper so that a refusal *returned* from a handler and a `NotImplementedError`
+    *raised* from one produce the same status. They used to disagree -- 400 from the
+    former, 501 from the latter -- which is the sort of split a client discovers by
+    getting two different answers to the same mistake.
+    """
+    return create_error_response(
+        message,
+        err_type="NotImplementedError",
+        status_code=HTTPStatus.NOT_IMPLEMENTED,
+        param=param,
+    )
+
+
+def to_error_response(exc: Exception) -> JSONResponse:
+    """Map an exception onto the status and type upstream would give it. C7.
+
+    `NotImplementedError` is a **501**, matching upstream's own mapping. It used to be
+    a 400 here, with a docstring arguing that a feature this build does not model is
+    the client's problem rather than the server's -- but that argument was against
+    reporting *500*, and 501 answers it better than 400 did: it says precisely "this
+    server does not implement that", it is what a real vLLM returns for the same
+    exception, and no sensible client retries it.
+
+    `ValueError`, `TypeError` and `OverflowError` are the client's problem and become
+    400. A jinja2 `TemplateError` is too -- it means the chat template rejected the
+    messages -- and is matched by name so this module need not import jinja2.
     """
     if isinstance(exc, NotImplementedError):
         return create_error_response(
-            str(exc), err_type="NotImplementedError", status_code=HTTPStatus.BAD_REQUEST
+            str(exc),
+            err_type="NotImplementedError",
+            status_code=HTTPStatus.NOT_IMPLEMENTED,
         )
-    if isinstance(exc, ValueError):
+    if isinstance(exc, ValueError | TypeError | OverflowError):
+        return create_error_response(str(exc))
+    if any(cls.__name__ == "TemplateError" for cls in type(exc).__mro__):
         return create_error_response(str(exc))
     return create_error_response(
         str(exc),

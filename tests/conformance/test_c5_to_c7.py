@@ -279,12 +279,91 @@ async def test_an_overlong_prompt_is_400(client):
     assert "maximum context length" in error["message"]
 
 
-async def test_a_malformed_request_is_422(client):
-    """FastAPI's validation error, which is what upstream returns too -- a client
-    distinguishing 400 from 422 is distinguishing 'your prompt is too long' from
-    'your JSON is wrong'."""
+async def test_a_malformed_request_is_400_in_the_vllm_envelope(client):
+    """C7. Upstream installs a `RequestValidationError` handler that converts
+    FastAPI's own 422 `{"detail": [...]}` into a 400 in vLLM's error envelope, so a
+    client that sends a bad body sees the same shape as every other error.
+
+    This test previously asserted the 422 and justified it with "which is what
+    upstream returns too" -- which was simply untrue, and meant the one test guarding
+    the malformed-body contract was pinning the divergence rather than catching it.
+    """
     response = await client.post("/v1/completions", json={"model": MODEL})
-    assert response.status_code == 422
+    assert response.status_code == 400
+    assert "detail" not in response.json()
+
+    error = response.json()["error"]
+    # The status *phrase*, not "BadRequestError" -- the schema-validation path and the
+    # raised-in-handler path use different type strings upstream, and both are real.
+    assert error["type"] == "Bad Request"
+    assert error["code"] == 400
+    assert error["param"] == "body.prompt"
+
+
+async def test_the_param_drops_pydantic_union_branch_markers(client):
+    """`prompt` is a union, so a wrong type reports `loc = ('body','prompt','str')` --
+    one branch of the union that happened to be tried first. `str` is pydantic's
+    vocabulary, not a field anyone sent, so upstream strips it.
+
+    The missing-field case above cannot catch this: its loc has no internal segment,
+    so it passes with or without the cleaning.
+    """
+    response = await client.post(
+        "/v1/completions", json={"model": MODEL, "prompt": 1.5}
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["param"] == "body.prompt"
+
+
+async def test_a_validation_message_is_the_compact_error_list(client):
+    """Built from `exc.errors()`, as upstream does, so the body names the offending
+    field and nothing about the server."""
+    response = await client.post("/v1/completions", json={"model": MODEL})
+    message = response.json()["error"]["message"]
+    assert message.startswith("1 validation error:")
+    assert "'loc': ('body', 'prompt')" in message
+    assert "pydantic.dev" not in message
+
+
+def test_sanitize_message_strips_paths_and_addresses():
+    """Tested directly, because on the happy path the message never contains one --
+    so a wire-level assertion passes whether or not this function does anything.
+    `sanitize_message` is the defence for the messages that *do* carry a path: those
+    built from an arbitrary exception's `str`.
+    """
+    from pvllm.entrypoints.serve.utils.server_utils import sanitize_message
+
+    # Each case isolates one rule. The obvious strings do not: an extensioned path
+    # under /opt is caught by *either* the prefix rule or the generic one, so a test
+    # using only those passes with either rule deleted.
+    assert sanitize_message("<obj at 0x7f9a1b2c3d4e>") == "<obj>"
+
+    # Prefix rule only: no file extension, so the generic rule cannot match.
+    assert sanitize_message("cannot read /opt/model/weights") == "cannot read <path>"
+
+    # Generic rule only: `/srv2` is not the `/srv` the prefix rule looks for.
+    assert sanitize_message("cannot read /srv2/thing/file.cfg") == "cannot read <path>"
+
+    # Traceback rule only: the frame must be *removed*, not merely path-substituted.
+    # With just the path rules it would survive as `File "<path>", line 3, in step`.
+    cleaned = sanitize_message(
+        'boom\n  File "/Users/someone/pvllm/engine.py", line 3, in step\n    x = 1'
+    )
+    assert cleaned == "boom"
+
+    assert sanitize_message("  plain message  ") == "plain message"
+
+
+async def test_an_unrouted_path_is_shaped_like_every_other_error(client):
+    """Starlette answers an unknown path with `{"detail": "Not Found"}` unless the
+    HTTPException handler is installed. One endpoint returning a different shape is
+    what breaks an SDK's error handling."""
+    response = await client.get("/no/such/route")
+    assert response.status_code == 404
+    body = response.json()
+    assert "detail" not in body
+    assert body["error"]["type"] == "Not Found"
+    assert body["error"]["code"] == 404
 
 
 async def test_error_bodies_are_shaped_like_openai_errors(client):

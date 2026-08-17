@@ -480,7 +480,7 @@ async def test_an_unmodelled_feature_is_refused_by_name(client, payload, param):
     response = await client.post(
         "/v1/responses", json={"model": MODEL, "input": "hi", **payload}
     )
-    assert response.status_code == 400
+    assert response.status_code == 501
     error = response.json()["error"]
     assert error["type"] == "NotImplementedError"
     assert error["param"] == param
@@ -686,7 +686,7 @@ async def test_an_image_part_is_refused_rather_than_stringified(client):
             ],
         },
     )
-    assert response.status_code == 400
+    assert response.status_code == 501
     assert response.json()["error"]["type"] == "NotImplementedError"
 
 

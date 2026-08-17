@@ -25,8 +25,8 @@ from pvllm.entrypoints.pooling.embed.protocol import (
     UsageInfo,
 )
 from pvllm.entrypoints.serve.utils.error_response import (
-    create_error_response,
     model_not_found,
+    not_implemented,
     to_error_response,
 )
 from pvllm.logger import init_logger
@@ -101,11 +101,10 @@ class OpenAIServingEmbedding:
             )
 
         if request.encoding_format != "float":
-            return create_error_response(
+            return not_implemented(
                 f"encoding_format {request.encoding_format!r} is not supported; only "
                 f"'float' is. Base64 encoding would compress a vector this engine "
                 f"invents, which would be precision no number here has.",
-                err_type="NotImplementedError",
                 param="encoding_format",
             )
 

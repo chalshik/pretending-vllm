@@ -288,14 +288,15 @@ async def test_a_prompt_longer_than_the_context_is_400(client):
     assert response.status_code == 400
 
 
-async def test_an_unmodeled_feature_is_400_not_500(client):
-    """It means the client asked for something this build does not model, which is a
-    problem with the request. A 500 would send a client into retry logic for
-    something that will never succeed."""
+async def test_an_unmodeled_feature_is_501_not_500(client):
+    """501, the status upstream gives the same exception, and the one that says what
+    actually happened: this server does not implement that. A 500 would send a client
+    into retry logic for something that will never succeed, and the 400 this used to
+    return blamed the request for a gap in the server."""
     response = await client.post(
         "/v1/completions", json={"model": MODEL, "prompt": ["one", "two"]}
     )
-    assert response.status_code == 400
+    assert response.status_code == 501
     assert response.json()["error"]["type"] == "NotImplementedError"
 
 
@@ -467,7 +468,7 @@ async def test_a_batched_prompt_is_refused_not_silently_collapsed(client):
     response = await client.post(
         "/v1/completions", json={"model": MODEL, "prompt": ["one", "two"]}
     )
-    assert response.status_code == 400
+    assert response.status_code == 501
     assert response.json()["error"]["type"] == "NotImplementedError"
 
 

@@ -20,8 +20,10 @@ from http import HTTPStatus
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+from starlette.exceptions import HTTPException
 
 from pvllm import __version__
 from pvllm.config import VllmConfig
@@ -44,6 +46,11 @@ from pvllm.entrypoints.serve.tokenize.serving import (
     TokenizeRequest,
 )
 from pvllm.entrypoints.serve.utils.error_response import to_error_response
+from pvllm.entrypoints.serve.utils.server_utils import (
+    exception_handler,
+    http_exception_handler,
+    validation_exception_handler,
+)
 from pvllm.logger import init_logger
 from pvllm.v1.engine.async_llm import AsyncLLM
 from pvllm.v1.metrics.loggers import PrometheusStatLogger
@@ -167,6 +174,18 @@ def build_app(
         state.shutdown()
 
     app = FastAPI(title="pretending-vllm", version=__version__, lifespan=lifespan)
+
+    # C5/C7. Registered in upstream's order, and registered at all because FastAPI
+    # otherwise answers a malformed body with its own 422 `{"detail": [...]}` --
+    # a different status *and* a different shape from every other error here, on
+    # every endpoint at once.
+    app.exception_handler(HTTPException)(http_exception_handler)
+    app.exception_handler(RequestValidationError)(validation_exception_handler)
+    app.exception_handler(ValueError)(exception_handler)
+    app.exception_handler(TypeError)(exception_handler)
+    app.exception_handler(OverflowError)(exception_handler)
+    app.exception_handler(NotImplementedError)(exception_handler)
+
     state = ServerState(vllm_config, registry)
     app.state.server = state
     app.state.vllm_config = vllm_config

@@ -255,7 +255,7 @@ async def test_base64_encoding_says_it_is_not_supported(client):
         "/v1/embeddings",
         json={"model": MODEL, "input": "x", "encoding_format": "base64"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 501
     assert response.json()["error"]["type"] == "NotImplementedError"
 
 

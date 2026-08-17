@@ -45,6 +45,7 @@ from pvllm.entrypoints.openai.responses.protocol import (
 from pvllm.entrypoints.serve.utils.error_response import (
     create_error_response,
     model_not_found,
+    not_implemented,
     to_error_response,
 )
 from pvllm.outputs import RequestOutput
@@ -252,10 +253,9 @@ class OpenAIServingResponses:
         silently is not.
         """
         if request.tools:
-            return create_error_response(
+            return not_implemented(
                 "The vLLM Responses API tool-calling path (--tool-call-parser) is not "
                 "modelled by pretending-vllm.",
-                err_type="NotImplementedError",
                 param="tools",
             )
         # Upstream's own validation, raised here rather than in the pydantic
@@ -285,10 +285,9 @@ class OpenAIServingResponses:
             # renderer trim the prompt to fit. pvllm has no prompt-truncating
             # renderer, and quietly not truncating would turn a request upstream
             # serves into one that overflows the window.
-            return create_error_response(
+            return not_implemented(
                 'Responses API prompt truncation (`truncation: "auto"`) is not '
                 "modelled by pretending-vllm.",
-                err_type="NotImplementedError",
                 param="truncation",
             )
         if request.cache_salt is not None:
@@ -296,36 +295,31 @@ class OpenAIServingResponses:
             # hash (C3) -- but no entrypoint plumbs it to the engine yet. Accepting
             # it silently would promise a cache partition that does not happen, and
             # the difference is visible in the prefix-cache metrics.
-            return create_error_response(
+            return not_implemented(
                 "`cache_salt` is not plumbed to the engine by pretending-vllm's "
                 "Responses endpoint.",
-                err_type="NotImplementedError",
                 param="cache_salt",
             )
         if request.prompt is not None:
-            return create_error_response(
+            return not_implemented(
                 "Responses API prompt templates are not supported.",
-                err_type="NotImplementedError",
                 param="prompt",
             )
         if request.is_include_output_logprobs():
-            return create_error_response(
+            return not_implemented(
                 "Responses API output logprobs are not modelled by pretending-vllm: "
                 "the simulated model has no logprobs to report.",
-                err_type="NotImplementedError",
                 param="include",
             )
         if request.previous_input_messages is not None:
-            return create_error_response(
+            return not_implemented(
                 "The vLLM Responses API `previous_input_messages` path requires the "
                 "harmony message format, which is not modelled by pretending-vllm.",
-                err_type="NotImplementedError",
                 param="previous_input_messages",
             )
         if request.enable_response_messages:
-            return create_error_response(
+            return not_implemented(
                 "`enable_response_messages` is not modelled by pretending-vllm.",
-                err_type="NotImplementedError",
                 param="enable_response_messages",
             )
         if request.background and not self.enable_store:
@@ -336,10 +330,9 @@ class OpenAIServingResponses:
                 param="background",
             )
         if request.background:
-            return create_error_response(
+            return not_implemented(
                 "Responses API background mode is not modelled by pretending-vllm: "
                 "it would need a task whose progress no simulated clock advances.",
-                err_type="NotImplementedError",
                 param="background",
             )
         return None
