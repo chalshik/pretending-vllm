@@ -158,6 +158,9 @@ def test_a_prefill_node_publishes_its_kv():
 
     assert len(store.resident) > 0
     assert store.bytes_written > 0
+    # The producer pays for its writes and reads nothing: both halves asserted,
+    # because a connector that charged the wrong side would still publish blocks.
+    assert store.bytes_read == 0
 
 
 def test_a_decode_node_finds_the_published_prefix():
@@ -170,7 +173,17 @@ def test_a_decode_node_finds_the_published_prefix():
     _, connector = run_on(**connected())
 
     assert store.num_hits > 0
+    assert store.bytes_read > 0, "a hit that transferred nothing"
     assert connector.load_seconds > 0.0, "nothing was pulled"
+    # `kv_role: kv_both`, so this node pulls the published prefix *and* publishes the
+    # tokens it goes on to generate -- both directions are charged, and separately.
+    # `save_seconds` is the other half of the pair, and it stayed unasserted long
+    # enough to become an inert counter; the first assertion written here assumed a
+    # decode node publishes nothing, which this config disproves.
+    assert connector.save_seconds > 0.0, "a kv_both node published nothing"
+    assert connector.load_seconds != connector.save_seconds, (
+        "the two directions are counted separately, not from one accumulator"
+    )
     assert len(store.resident) == published
 
 
@@ -263,3 +276,23 @@ def test_concurrent_requests_against_a_store_all_drain():
         assert all(len(o.outputs[0].token_ids) == 6 for o in outputs)
     finally:
         engine.shutdown()
+
+
+def test_asking_for_kv_cache_events_is_refused_by_name():
+    """R12.5's block store/remove event stream is not implemented.
+
+    The flag used to be accepted, threaded into `BlockPool`, stored, and read by
+    nothing -- so a client that asked for events got a pool that published none and
+    said so nowhere. That is the silent no-op this project refuses everywhere else,
+    and it survived because an unread attribute is invisible until something looks
+    for one.
+    """
+    import pytest
+
+    from pvllm.v1.core.block_pool import BlockPool
+
+    with pytest.raises(NotImplementedError, match="KV cache event publishing"):
+        BlockPool(num_gpu_blocks=8, enable_kv_cache_events=True)
+
+    # And the ordinary construction is untouched.
+    assert BlockPool(num_gpu_blocks=8).num_gpu_blocks == 8

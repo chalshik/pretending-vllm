@@ -641,6 +641,7 @@ max_concurrency    = num_gpu_blocks * block_size / max_model_len
   recorded responses.
 * R21.5. Whole suite under 30 seconds on a laptop with the constant cost model.
 * R21.6. A mutation catalogue (`tests/mutations.toml`, run by `tools/mutate.py`). Each entry names a guarantee, the minimal edit that breaks it, and the test that should notice; the tool asserts that test FAILS under the edit. A green suite says the tests pass, not that they would fail if the code were wrong — and on this project the gap has been real: mutation testing has found a non-discriminating test nearly every time it was run. Enforced in CI so it is no longer something someone remembers to do.
+* R21.7. An inert-mechanism lint (`tests/unit/test_inert.py`). Every `self.X = ...` in the package is checked against every `.X` read in the package, its tests and its tools; a name written and never read is reported. Defect class two in this project's taxonomy — a mechanism present, commented, sometimes tested, and changing nothing — had produced six findings by hand and four more on this lint's first run, two of them carrying comments claiming they fed metrics that were never built. Exemptions live in an `ALLOWED` map and must state a reason.
 
 ## 7. Core data structures
 

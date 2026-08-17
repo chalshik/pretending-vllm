@@ -143,7 +143,11 @@ class SimSharedStoreConnector(KVConnectorBase):
         #: Pending work for the next `build_connector_meta`.
         self._pending_loads: dict[str, tuple[list[int], int]] = {}
         self._pending_saves: dict[str, tuple[list[int], int]] = {}
-        #: R17.2. Cumulative modeled transfer time, for the metrics.
+        #: R17.2. Cumulative modeled transfer time, each side counted separately.
+        #: No Prometheus metric reads these -- the comment used to say there was
+        #: one -- but the conformance tests assert on both, which is what keeps the
+        #: producer and consumer halves of a disaggregated run honest about who
+        #: paid for what.
         self.load_seconds = 0.0
         self.save_seconds = 0.0
         #: Modeled write time not yet charged to the clock. Banked here because the

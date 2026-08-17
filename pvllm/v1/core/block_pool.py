@@ -43,7 +43,7 @@ class BlockPool:
     Args:
         num_gpu_blocks: Total blocks, from the memory model (R10.2).
         enable_caching: Whether prefix caching is on. M2.
-        enable_kv_cache_events: Whether to publish block store/remove events (R12.5).
+        enable_kv_cache_events: Refused when true -- see below.
     """
 
     def __init__(
@@ -59,11 +59,21 @@ class BlockPool:
                 f"model derives this; a non-positive value means the KV pool did not "
                 f"fit (requirement R10.5)."
             )
+        if enable_kv_cache_events:
+            # R12.5's block store/remove event stream is not implemented. The flag was
+            # threaded down here and stored, and nothing ever read it -- so asking for
+            # the events got a pool that silently published none, which is the exact
+            # shape of silent no-op this project refuses everywhere else. Refused by
+            # name until the events exist.
+            raise NotImplementedError(
+                "KV cache event publishing (R12.5, --kv-events-config) is not "
+                "modelled by pretending-vllm: no block store/remove events are "
+                "emitted, so enabling it would report a stream that never arrives."
+            )
         self.num_gpu_blocks = num_gpu_blocks
         # Annotated explicitly: the guard above narrows the parameter to False, and
         # without this the unhashed-block branch below reads as dead code.
         self.enable_caching: bool = enable_caching
-        self.enable_kv_cache_events = enable_kv_cache_events
 
         # Indexed by block_id, so blocks[i].block_id == i.
         self.blocks: list[KVCacheBlock] = [

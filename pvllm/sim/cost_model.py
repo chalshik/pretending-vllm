@@ -237,7 +237,6 @@ class RooflineCostModel(CostModel):
         # latency, less memory per device" -- correct for a single request and
         # pessimistic for a saturated one.
         self.layers_local = model.num_hidden_layers
-        self.layers_per_stage = max(1, model.num_hidden_layers // pp_size)
 
         from pvllm.sim.memory import compute_weight_bytes
 

@@ -220,3 +220,11 @@ file = '''pvllm/entrypoints/openai/api_server.py'''
 old = '''        yield f"event: error\ndata: {body}\n\n"'''
 new = '''        pass'''
 test = '''tests/entrypoints/test_responses_api.py::test_a_mid_stream_failure_emits_a_terminal_error_event'''
+
+[[mutation]]
+name = '''kv-cache-events-are-refused'''
+why = '''R12.5 events are not implemented, so accepting the flag would publish a stream that never arrives.'''
+file = '''pvllm/v1/core/block_pool.py'''
+old = '''        if enable_kv_cache_events:'''
+new = '''        if False:'''
+test = '''tests/v1/test_kv_connector.py::test_asking_for_kv_cache_events_is_refused_by_name'''

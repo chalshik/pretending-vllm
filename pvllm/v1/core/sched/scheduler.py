@@ -182,8 +182,6 @@ class Scheduler:
         # because deciding what to load is a scheduling decision -- the worker half
         # lives in the worker and never calls this one.
         self.connector = _build_connector(vllm_config)
-        #: R14. Rejected drafts from the last step, per request, for the metrics.
-        self.last_num_invalid_spec_tokens: dict[str, int] = {}
         #: R14. Cumulative draft counters, for `vllm:spec_decode_*`.
         self.num_draft_tokens_total = 0
         self.num_accepted_tokens_total = 0
@@ -819,8 +817,6 @@ class Scheduler:
                         pooling_output=pooling_output,
                     )
                 )
-
-        self.last_num_invalid_spec_tokens = num_invalid_spec_tokens
 
         # R6.7 + R14. Window eviction runs *here*, after the step's output has been
         # folded back and any rejected drafts rolled off `num_computed_tokens` --
