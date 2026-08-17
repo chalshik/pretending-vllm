@@ -1,0 +1,504 @@
+"""The Responses API, over the same engine. R2.2, C5, C7.
+
+Upstream: vllm/entrypoints/openai/responses/serving.py
+Tier: B
+
+Upstream's file is 1,561 lines and most of it is tool calling, the harmony/gpt-oss
+reasoning parser, and the MCP tool server -- three subsystems pvllm has no basis for,
+because they operate on token streams a simulated model does not produce. Those are
+refused by name rather than approximated: answering a tool-calling request with a
+plain assistant message is the kind of plausible wrong answer that costs more than an
+error would.
+
+What is left is the part a client can actually observe: the wire schema, the nine-event
+stream, and the response store. The store is worth having *because* it is pure control
+plane -- four dicts and a lock, no device anywhere near it -- and so there is nothing
+to simulate and no excuse for faking it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from collections.abc import AsyncGenerator
+from http import HTTPStatus
+from typing import Any
+
+from fastapi import Request
+from fastapi.responses import JSONResponse
+
+from pvllm.entrypoints.openai.responses.protocol import (
+    IncompleteDetails,
+    InputTokensDetails,
+    ItemStatus,
+    OutputTokensDetails,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponsesRequest,
+    ResponsesResponse,
+    ResponseUsage,
+)
+from pvllm.entrypoints.serve.utils.error_response import (
+    create_error_response,
+    model_not_found,
+    to_error_response,
+)
+from pvllm.outputs import RequestOutput
+from pvllm.sampling_params import SamplingParams
+from pvllm.v1.engine.async_llm import AsyncLLM
+
+#: Upstream reads this through `vllm.envs`, which parses `int(os.getenv(name, "0"))`.
+#: Same name and same default here, so one runbook flag flips both.
+_STORE_ENV = "VLLM_ENABLE_RESPONSES_API_STORE"
+
+#: Terminal statuses. `cancel` is a no-op against any of them.
+_TERMINAL: frozenset[str] = frozenset(
+    {"completed", "incomplete", "failed", "cancelled"}
+)
+
+
+def store_enabled() -> bool:
+    """Whether the response store is on. Off by default, exactly as upstream.
+
+    This matters more than it looks. With the store off, a stock vLLM answers every
+    `GET /v1/responses/{id}` with a 404 and rejects `background=True` -- so a pvllm
+    that stored by default would *succeed* where the real thing fails, and the
+    divergence would only surface when the user swapped the real engine back in.
+    """
+    try:
+        return bool(int(os.getenv(_STORE_ENV, "0")))
+    except ValueError:
+        return False
+
+
+def construct_input_messages(
+    *,
+    request_instructions: str | None = None,
+    request_input: str | list[dict[str, Any]],
+    prev_msg: list[dict[str, Any]] | None = None,
+    prev_response_output: list[ResponseOutputMessage] | None = None,
+) -> list[dict[str, Any]]:
+    """Flatten a Responses turn into the chat messages the template renders.
+
+    The one rule worth stating: instructions do **not** carry over between turns.
+    A stored conversation's system messages are dropped and only the current
+    request's `instructions` becomes a system message, which is what the OpenAI spec
+    says and the opposite of what "replay the previous messages" would do.
+    """
+    messages: list[dict[str, Any]] = []
+    if request_instructions:
+        messages.append({"role": "system", "content": request_instructions})
+
+    if prev_msg is not None:
+        messages.extend(m for m in prev_msg if m.get("role") != "system")
+    if prev_response_output is not None:
+        for item in prev_response_output:
+            for content in item.content:
+                messages.append({"role": "assistant", "content": content.text})
+
+    # A bare string is a single user turn: the Responses API takes plain text without
+    # the chat envelope, which is most of why it exists.
+    if isinstance(request_input, str):
+        messages.append({"role": "user", "content": request_input})
+    else:
+        messages.extend(request_input)
+    return messages
+
+
+class OpenAIServingResponses:
+    """`/v1/responses`, and the two routes that read what it stored."""
+
+    def __init__(self, engine: AsyncLLM, served_model_names: list[str]) -> None:
+        self.engine = engine
+        self.served_model_names = served_model_names
+        self._counter = 0
+        #: R16.1. Grafted on by the server once the adapter registry exists, as the
+        #: other handlers do.
+        self.models: Any = None
+
+        self.enable_store = store_enabled()
+        #: Upstream's four containers, same names. Unbounded and never evicted --
+        #: upstream says so in three FIXMEs and warns at startup. Bounding them here
+        #: would be a *divergence*: a `previous_response_id` from 10,000 requests ago
+        #: resolves upstream and would 404 against an LRU.
+        self.response_store: dict[str, ResponsesResponse] = {}
+        self.response_store_lock = asyncio.Lock()
+        self.msg_store: dict[str, list[dict[str, Any]]] = {}
+        self.background_tasks: dict[str, asyncio.Task[Any]] = {}
+
+    # --- ids and time --------------------------------------------------------
+
+    def _next_request_id(self) -> str:
+        """`resp_` and sixteen hex digits, which is the shape upstream's
+        `resp_{random_uuid()}` produces.
+
+        A counter rather than a uuid: B4 requires the same seed and config to produce
+        byte-identical output, and the purity lint keeps randomness inside
+        `pvllm/sim/`. A client parsing the id sees what it expects; a client relying
+        on the entropy does not, and that is documented rather than hidden.
+        """
+        self._counter += 1
+        return f"resp_{self._counter:016x}"
+
+    def _next_item_id(self, prefix: str = "msg") -> str:
+        self._counter += 1
+        return f"{prefix}_{self._counter:016x}"
+
+    def _next_bare_item_id(self) -> str:
+        """The id the *streaming* events carry, which has no prefix.
+
+        Upstream mints a bare uuid in `streaming_events.py` and a separate
+        `msg_`-prefixed id for the final body, so the two do not match and a client
+        correlating them by id finds they never did. Reproduced rather than tidied:
+        it is on the wire.
+        """
+        self._counter += 1
+        return f"{self._counter:016x}"
+
+    def _created(self) -> int:
+        return int(self.engine.engine_core.clock_time)
+
+    # --- refusals ------------------------------------------------------------
+
+    def _refuse(self, request: ResponsesRequest) -> JSONResponse | None:
+        """Everything this build cannot model, named, before the 200 is committed.
+
+        Each of these has a real implementation upstream that reads or writes a token
+        stream a simulated model does not produce. Refusing is the discipline the
+        whole project rests on: the alternative is a response that looks right and
+        silently is not.
+        """
+        if request.tools:
+            return create_error_response(
+                "The vLLM Responses API tool-calling path (--tool-call-parser) is not "
+                "modelled by pretending-vllm.",
+                err_type="NotImplementedError",
+                param="tools",
+            )
+        # Upstream's own validation, raised here rather than in the pydantic
+        # validator so the status is 400 rather than FastAPI's 422.
+        if request.tool_choice == "required":
+            return create_error_response(
+                "Tool choice 'required' must be specified with 'tools' parameter.",
+                param="tool_choice",
+            )
+        if (
+            isinstance(request.tool_choice, dict)
+            and request.tool_choice.get("type") == "function"
+        ):
+            return create_error_response(
+                "Tool choice 'function' not found in 'tools' parameter.",
+                param="tool_choice",
+            )
+        if request.reasoning is not None or "reasoning.encrypted_content" in (
+            request.include or []
+        ):
+            return create_error_response(
+                "The vLLM harmony/gpt-oss reasoning parser (--reasoning-parser) is "
+                "not modelled by pretending-vllm.",
+                err_type="NotImplementedError",
+                param="reasoning",
+            )
+        if request.prompt is not None:
+            return create_error_response(
+                "Responses API prompt templates are not supported.",
+                err_type="NotImplementedError",
+                param="prompt",
+            )
+        if request.is_include_output_logprobs():
+            return create_error_response(
+                "Responses API output logprobs are not modelled by pretending-vllm: "
+                "the simulated model has no logprobs to report.",
+                err_type="NotImplementedError",
+                param="include",
+            )
+        if request.previous_input_messages is not None:
+            return create_error_response(
+                "The vLLM Responses API `previous_input_messages` path requires the "
+                "harmony message format, which is not modelled by pretending-vllm.",
+                err_type="NotImplementedError",
+                param="previous_input_messages",
+            )
+        if request.enable_response_messages:
+            return create_error_response(
+                "`enable_response_messages` is not modelled by pretending-vllm.",
+                err_type="NotImplementedError",
+                param="enable_response_messages",
+            )
+        if request.background and not self.enable_store:
+            # Upstream's own error when the store is off, which is its default.
+            return create_error_response(
+                "background mode requires the response store to be enabled. Set "
+                f"{_STORE_ENV}=1.",
+                param="background",
+            )
+        if request.background:
+            return create_error_response(
+                "Responses API background mode is not modelled by pretending-vllm: "
+                "it would need a task whose progress no simulated clock advances.",
+                err_type="NotImplementedError",
+                param="background",
+            )
+        return None
+
+    # --- the request path ----------------------------------------------------
+
+    async def create_responses(
+        self, request: ResponsesRequest, raw_request: Request | None = None
+    ) -> ResponsesResponse | JSONResponse | AsyncGenerator[Any, None]:
+        model_name = request.model or self.served_model_names[0]
+        if request.model is not None:
+            served, lora_request = (
+                self.models.resolve(request.model)
+                if self.models is not None
+                else (request.model in self.served_model_names, None)
+            )
+            if not served:
+                return model_not_found(
+                    request.model,
+                    self.served_model_names
+                    + (
+                        list(self.models.lora_modules)
+                        if self.models is not None
+                        else []
+                    ),
+                )
+        else:
+            # `model` is optional on this endpoint, unlike chat and completions. A
+            # request that names none serves the base model rather than 422-ing.
+            lora_request = None
+
+        refusal = self._refuse(request)
+        if refusal is not None:
+            return refusal
+
+        # Upstream accepts `store=True` and quietly drops it when the store is off,
+        # rather than erroring -- because the OpenAI SDK sends `store=True` by default
+        # and rejecting it would break every unmodified client. This is the one place
+        # a silent no-op is the correct port: it is what is on the wire.
+        if request.store and not self.enable_store:
+            request.store = False
+
+        prev_response: ResponsesResponse | None = None
+        if request.previous_response_id is not None:
+            async with self.response_store_lock:
+                prev_response = self.response_store.get(request.previous_response_id)
+            if prev_response is None:
+                return create_error_response(
+                    f"Response with id '{request.previous_response_id}' not found.",
+                    err_type="NotFoundError",
+                    status_code=HTTPStatus.NOT_FOUND,
+                    param="previous_response_id",
+                )
+
+        response_id = request.request_id or self._next_request_id()
+        messages = construct_input_messages(
+            request_instructions=request.instructions,
+            request_input=request.input,
+            prev_msg=self.msg_store.get(prev_response.id) if prev_response else None,
+            prev_response_output=prev_response.output if prev_response else None,
+        )
+
+        try:
+            prompt = render_chat_prompt(
+                self.engine.tokenizer,
+                messages,
+                chat_template_kwargs=request.chat_template_kwargs,
+            )
+            sampling_params = request.to_sampling_params(
+                self._default_max_tokens(prompt)
+            )
+        except ValueError as exc:
+            return create_error_response(str(exc))
+
+        if request.store:
+            self.msg_store[response_id] = messages
+
+        if request.stream:
+            from pvllm.entrypoints.openai.responses.streaming import stream_responses
+
+            return stream_responses(
+                self,
+                request,
+                response_id=response_id,
+                model_name=model_name,
+                prompt=prompt,
+                sampling_params=sampling_params,
+                raw_request=raw_request,
+                lora_request=lora_request,
+            )
+        return await self._complete(
+            request,
+            response_id=response_id,
+            model_name=model_name,
+            prompt=prompt,
+            sampling_params=sampling_params,
+            raw_request=raw_request,
+            lora_request=lora_request,
+        )
+
+    def _default_max_tokens(self, prompt: str) -> int:
+        """What is left of the context window once the prompt is counted.
+
+        Upstream resolves this before generating and echoes it back as
+        `max_output_tokens`, so a request that asked for nothing still gets a number.
+        """
+        max_model_len = self.engine.model_config.max_model_len
+        assert max_model_len is not None
+        return max(1, max_model_len - len(self.engine.tokenizer.encode(prompt)))
+
+    async def _complete(
+        self,
+        request: ResponsesRequest,
+        *,
+        response_id: str,
+        model_name: str,
+        prompt: str,
+        sampling_params: SamplingParams,
+        raw_request: Request | None,
+        lora_request: Any = None,
+    ) -> ResponsesResponse | JSONResponse:
+        final: RequestOutput | None = None
+        try:
+            async for output in self.engine.generate(
+                prompt,
+                sampling_params,
+                response_id,
+                priority=request.priority,
+                lora_request=lora_request,
+            ):
+                final = output
+                if raw_request is not None and await raw_request.is_disconnected():
+                    return create_error_response(
+                        "Client disconnected.", err_type="ClientDisconnected"
+                    )
+        except Exception as exc:
+            return to_error_response(exc)
+
+        if final is None:
+            return create_error_response("The engine produced no output.")
+
+        response = self._build_response(
+            request,
+            sampling_params,
+            response_id=response_id,
+            model_name=model_name,
+            final=final,
+        )
+        if request.store:
+            async with self.response_store_lock:
+                self.response_store[response.id] = response
+        return response
+
+    def _build_response(
+        self,
+        request: ResponsesRequest,
+        sampling_params: SamplingParams,
+        *,
+        response_id: str,
+        model_name: str,
+        final: RequestOutput,
+    ) -> ResponsesResponse:
+        completion = final.outputs[0]
+        num_prompt_tokens = len(final.prompt_token_ids or ())
+        num_output_tokens = len(completion.token_ids)
+
+        # `length` is the only finish reason that makes a response *incomplete*
+        # rather than complete: the model was still going when the budget ran out.
+        incomplete = completion.finish_reason == "length"
+        status: ItemStatus = "incomplete" if incomplete else "completed"
+
+        return ResponsesResponse.from_request(
+            request,
+            sampling_params,
+            response_id=response_id,
+            model_name=model_name,
+            created_at=self._created(),
+            output=[
+                ResponseOutputMessage(
+                    id=self._next_item_id(),
+                    content=[ResponseOutputText(text=completion.text)],
+                    status=status,
+                )
+            ],
+            status=status,
+            usage=ResponseUsage(
+                input_tokens=num_prompt_tokens,
+                input_tokens_details=InputTokensDetails(
+                    cached_tokens=final.num_cached_tokens
+                ),
+                output_tokens=num_output_tokens,
+                output_tokens_details=OutputTokensDetails(),
+                total_tokens=num_prompt_tokens + num_output_tokens,
+            ),
+            incomplete_details=(
+                IncompleteDetails(reason="max_output_tokens") if incomplete else None
+            ),
+        )
+
+    # --- the two routes that read the store ----------------------------------
+
+    async def retrieve_responses(
+        self, response_id: str
+    ) -> ResponsesResponse | JSONResponse:
+        async with self.response_store_lock:
+            response = self.response_store.get(response_id)
+        if response is None:
+            return self._not_found(response_id)
+        return response
+
+    async def cancel_responses(
+        self, response_id: str
+    ) -> ResponsesResponse | JSONResponse:
+        async with self.response_store_lock:
+            response = self.response_store.get(response_id)
+            if response is None:
+                return self._not_found(response_id)
+            if response.status in _TERMINAL:
+                return create_error_response(
+                    f"Cannot cancel a response with status {response.status}.",
+                    param="response_id",
+                )
+            response.status = "cancelled"
+            self.response_store[response_id] = response
+
+        task = self.background_tasks.get(response_id)
+        if task is not None and not task.done():
+            task.cancel()
+        await self.engine.abort(response_id)
+        return response
+
+    def _not_found(self, response_id: str) -> JSONResponse:
+        """The same 404 whether the id was never seen or the store is simply off.
+
+        Upstream cannot distinguish these either, and the indistinguishability is the
+        point: a client against a default-configured vLLM gets exactly this.
+        """
+        return create_error_response(
+            f"Response with id '{response_id}' not found.",
+            err_type="NotFoundError",
+            status_code=HTTPStatus.NOT_FOUND,
+            param="response_id",
+        )
+
+
+def render_chat_prompt(
+    tokenizer: Any,
+    messages: list[dict[str, Any]],
+    *,
+    add_generation_prompt: bool = True,
+    chat_template_kwargs: dict[str, Any] | None = None,
+) -> str:
+    """One chat-template path for every endpoint that has messages.
+
+    Shared with `/v1/chat/completions` deliberately: two renderers would let the same
+    conversation tokenize to two different lengths, and the token count is what the
+    scheduler budgets and what `usage` reports.
+    """
+    return str(
+        tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=add_generation_prompt,
+            **(chat_template_kwargs or {}),
+        )
+    )

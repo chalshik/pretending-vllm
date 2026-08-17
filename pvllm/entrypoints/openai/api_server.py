@@ -13,6 +13,7 @@ exists and reports it, because a product that polls readiness needs something to
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from http import HTTPStatus
@@ -33,6 +34,8 @@ from pvllm.entrypoints.openai.models.serving import (
     OpenAIServingModels,
     build_lora_modules,
 )
+from pvllm.entrypoints.openai.responses.protocol import ResponsesRequest
+from pvllm.entrypoints.openai.responses.serving import OpenAIServingResponses
 from pvllm.entrypoints.pooling.embed.protocol import EmbeddingRequest
 from pvllm.entrypoints.pooling.embed.serving import OpenAIServingEmbedding
 from pvllm.entrypoints.serve.tokenize.serving import (
@@ -68,6 +71,7 @@ class ServerState:
         self.completion = OpenAIServingCompletion(self.engine, self.served_model_names)
         self.chat = OpenAIServingChat(self.engine, self.served_model_names)
         self.embedding = OpenAIServingEmbedding(self.engine, self.served_model_names)
+        self.responses = OpenAIServingResponses(self.engine, self.served_model_names)
         # R16.1. `--lora-modules name=path`, resolved once. Each adapter gets a
         # stable integer id: the id partitions the prefix cache, so it must not
         # change between requests naming the same adapter.
@@ -83,6 +87,7 @@ class ServerState:
         self.completion.models = self.models
         self.chat.models = self.models
         self.embedding.models = self.models
+        self.responses.models = self.models
         self.tokenization = OpenAIServingTokenization(
             self.engine.tokenizer, model_config.max_model_len
         )
@@ -122,6 +127,22 @@ class ServerState:
 
     def shutdown(self) -> None:
         self.engine.shutdown()
+
+
+async def convert_stream_to_sse_events(
+    generator: AsyncIterator[dict[str, Any]],
+) -> AsyncIterator[str]:
+    """Frame Responses events as named SSE. R2.3, C5.
+
+    Two differences from every other streaming endpoint here, both of which a client
+    can see. Each frame carries an `event:` line naming the type, because the payloads
+    are heterogeneous and a client dispatches on it. And there is **no** trailing
+    `data: [DONE]` -- the stream ends after `response.completed`. Chat completions
+    sends the sentinel; this does not, and a client that waits for one waits forever.
+    """
+    async for event in generator:
+        payload = json.dumps(event["payload"], separators=(",", ":"))
+        yield f"event: {event['type']}\ndata: {payload}\n\n"
 
 
 def build_app(
@@ -186,6 +207,34 @@ def build_app(
         if isinstance(result, AsyncIterator):
             return StreamingResponse(result, media_type="text/event-stream")
         return result
+
+    @app.post("/v1/responses")
+    async def create_responses(request: ResponsesRequest, raw_request: Request) -> Any:
+        try:
+            result = await state.responses.create_responses(request, raw_request)
+        except Exception as exc:
+            return to_error_response(exc)
+        if isinstance(result, JSONResponse):
+            return result
+        if isinstance(result, AsyncIterator):
+            return StreamingResponse(
+                convert_stream_to_sse_events(result), media_type="text/event-stream"
+            )
+        return result
+
+    @app.get("/v1/responses/{response_id}")
+    async def retrieve_responses(response_id: str) -> Any:
+        try:
+            return await state.responses.retrieve_responses(response_id)
+        except Exception as exc:
+            return to_error_response(exc)
+
+    @app.post("/v1/responses/{response_id}/cancel")
+    async def cancel_responses(response_id: str) -> Any:
+        try:
+            return await state.responses.cancel_responses(response_id)
+        except Exception as exc:
+            return to_error_response(exc)
 
     @app.post("/v1/embeddings")
     async def create_embedding(request: EmbeddingRequest, raw_request: Request) -> Any:

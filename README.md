@@ -15,9 +15,10 @@ See [UPSTREAM.md](UPSTREAM.md).
 > trace, timeline viewer, `/debug/*` endpoints), the conformance suite, `pvllm bench`, the
 > multiprocess engine core, real/scaled clocks, structured output, LoRA, tensor and pipeline
 > parallelism, speculative decoding, sliding-window attention, multimodal, KV
-> disaggregation, `n > 1`, `/v1/embeddings`, hybrid full/windowed models, data parallelism, and
-> expert parallelism all work. Real KV transports, a KV connector paired with a sliding window,
-> and data parallelism over the multiprocess core are not implemented and refuse by name.
+> disaggregation, `n > 1`, `/v1/embeddings`, `/v1/responses`, hybrid full/windowed models, data
+> parallelism, and expert parallelism all work. Real KV transports, a KV connector paired with a
+> sliding window, data parallelism over the multiprocess core, and the Responses API's tool
+> calling, harmony/gpt-oss reasoning and background mode are not implemented and refuse by name.
 
 ```bash
 pvllm serve --model meta-llama/Llama-3.1-8B-Instruct --device-card datacenter-80gb
@@ -183,6 +184,7 @@ observable rather than approximated.
 | `n > 1` | fans out into `n` engine requests sharing the prompt through the prefix cache — one response, `n` times the decode pressure |
 | `seed` on a request | the same seed and parameters reproduce the same completion; a seeded `n > 1` request offsets its children so they stay distinct |
 | `/v1/embeddings` | each document is its own request: prefill and stop, no decode — so a page of them batches, queues, and shares a preamble through the prefix cache |
+| `/v1/responses` | the stateful surface: named SSE events instead of deltas and no `[DONE]`, `input_tokens`/`output_tokens` rather than `prompt_tokens`/`completion_tokens`, and a response store that — as upstream — is **off** unless `VLLM_ENABLE_RESPONSES_API_STORE=1`, so `GET /v1/responses/{id}` and `previous_response_id` 404 by default exactly as they do against stock vLLM |
 | speculative decoding | fewer steps when acceptance is high, wasted work when it is not; lossless either way |
 | an `image_url` content part | 256 placeholder tokens, a separate encoder budget, an encoder pass priced at ViT-L scale, and a cache the second request with the same image hits |
 | a KV connector | a second engine pulls a published prefix instead of recomputing it; both sides pay — the producer for its writes, the consumer for its reads — so `kv_role` and your store's bandwidth decide whether it wins against recomputing |
