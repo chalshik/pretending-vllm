@@ -10,6 +10,10 @@ refused by name rather than approximated: answering a tool-calling request with 
 plain assistant message is the kind of plausible wrong answer that costs more than an
 error would.
 
+`reasoning` is *not* one of them, despite the name. It selects no parser: upstream
+turns `reasoning.effort` into a chat-template kwarg and echoes the field back, so a
+stock server answers 200 and this one does too.
+
 What is left is the part a client can actually observe: the wire schema, the nine-event
 stream, and the response store. The store is worth having *because* it is pure control
 plane -- four dicts and a lock, no device anywhere near it -- and so there is nothing
@@ -101,8 +105,87 @@ def construct_input_messages(
     if isinstance(request_input, str):
         messages.append({"role": "user", "content": request_input})
     else:
-        messages.extend(request_input)
+        messages.extend(_normalise_input_items(request_input))
     return messages
+
+
+#: Item types that carry no text and belong to a subsystem this build refuses. Named
+#: rather than silently dropped, because dropping one would change the prompt.
+_UNSUPPORTED_ITEM_TYPES = frozenset(
+    {
+        "item_reference",
+        "function_call",
+        "function_call_output",
+        "computer_call",
+        "computer_call_output",
+        "image_generation_call",
+        "local_shell_call",
+        "local_shell_call_output",
+        "code_interpreter_call",
+        "file_search_call",
+        "web_search_call",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "reasoning",
+    }
+)
+
+
+def _normalise_input_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten each item's `content` down to the text the chat template renders.
+
+    Extending the message list with the raw dicts put the *Python repr of a list of
+    part dicts* into the prompt whenever `content` was anything but a bare string --
+    which is what the OpenAI SDK sends for everything except the simplest turn. A 200
+    with a corrupted prompt, a wrong `usage.input_tokens` and different generated
+    text: the plausible wrong answer this project exists to avoid.
+    """
+    normalised: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(f"input items must be objects, got {type(item).__name__}")
+
+        item_type = item.get("type")
+        if item_type in _UNSUPPORTED_ITEM_TYPES:
+            raise NotImplementedError(
+                f"Responses API input items of type {item_type!r} are not modelled "
+                "by pretending-vllm."
+            )
+
+        role = item.get("role")
+        if role is None:
+            raise ValueError(f"input item is missing a role: {item!r}")
+
+        content = item.get("content")
+        if isinstance(content, str) or content is None:
+            normalised.append({"role": role, "content": content or ""})
+            continue
+        if not isinstance(content, list):
+            raise ValueError(f"input item content must be a string or a list: {item!r}")
+
+        # `input_text` / `output_text` resolve to their text. An `input_image` part
+        # would have to reach the multimodal path, and this endpoint does not wire it
+        # -- stringifying it into the prompt would silently invent a caption.
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+                continue
+            if not isinstance(part, dict):
+                raise ValueError(f"unrecognised content part: {part!r}")
+            part_type = part.get("type")
+            if part_type in ("input_text", "output_text", "text"):
+                parts.append(str(part.get("text", "")))
+            elif part_type in ("input_image", "input_file", "input_audio"):
+                raise NotImplementedError(
+                    f"Responses API {part_type!r} content parts are not modelled by "
+                    "pretending-vllm: /v1/responses does not reach the multimodal "
+                    "path. Use /v1/chat/completions for images."
+                )
+            else:
+                raise ValueError(f"unrecognised content part type: {part_type!r}")
+        normalised.append({"role": role, "content": "".join(parts)})
+    return normalised
 
 
 class OpenAIServingResponses:
@@ -190,14 +273,34 @@ class OpenAIServingResponses:
                 "Tool choice 'function' not found in 'tools' parameter.",
                 param="tool_choice",
             )
-        if request.reasoning is not None or "reasoning.encrypted_content" in (
-            request.include or []
-        ):
+        # `reasoning` is NOT refused. It does not select the harmony path: upstream
+        # turns `reasoning.effort` into a `reasoning_effort` chat-template kwarg and
+        # flips `enable_thinking`, then echoes the field back. On a stock server it is
+        # served, so refusing it was a live C5/C7 divergence.
+        #
+        # `include` is likewise accept-and-ignore. Its only consumer upstream is the
+        # logprobs check below; the other five members are validated and then inert.
+        if request.truncation not in (None, "disabled"):
+            # Upstream turns this into `truncate_prompt_tokens=-1`, which makes the
+            # renderer trim the prompt to fit. pvllm has no prompt-truncating
+            # renderer, and quietly not truncating would turn a request upstream
+            # serves into one that overflows the window.
             return create_error_response(
-                "The vLLM harmony/gpt-oss reasoning parser (--reasoning-parser) is "
-                "not modelled by pretending-vllm.",
+                'Responses API prompt truncation (`truncation: "auto"`) is not '
+                "modelled by pretending-vllm.",
                 err_type="NotImplementedError",
-                param="reasoning",
+                param="truncation",
+            )
+        if request.cache_salt is not None:
+            # pvllm *does* model cache salting -- it is an extra key in the block
+            # hash (C3) -- but no entrypoint plumbs it to the engine yet. Accepting
+            # it silently would promise a cache partition that does not happen, and
+            # the difference is visible in the prefix-cache metrics.
+            return create_error_response(
+                "`cache_salt` is not plumbed to the engine by pretending-vllm's "
+                "Responses endpoint.",
+                err_type="NotImplementedError",
+                param="cache_salt",
             )
         if request.prompt is not None:
             return create_error_response(
@@ -292,6 +395,16 @@ class OpenAIServingResponses:
                 )
 
         response_id = request.request_id or self._next_request_id()
+        # The client chose this id, so it can collide with one already running -- and
+        # the same string is the engine's request id. Caught here so the answer is a
+        # 409 rather than a torn-down engine.
+        if response_id in self.engine.in_flight_request_ids:
+            return create_error_response(
+                f"Response with id '{response_id}' is already in progress.",
+                err_type="ConflictError",
+                status_code=HTTPStatus.CONFLICT,
+                param="request_id",
+            )
         messages = construct_input_messages(
             request_instructions=request.instructions,
             request_input=request.input,
@@ -303,11 +416,13 @@ class OpenAIServingResponses:
             prompt = render_chat_prompt(
                 self.engine.tokenizer,
                 messages,
-                chat_template_kwargs=request.chat_template_kwargs,
+                chat_template_kwargs=_chat_template_kwargs(request),
             )
             sampling_params = request.to_sampling_params(
                 self._default_max_tokens(prompt)
             )
+        except NotImplementedError as exc:
+            return to_error_response(exc)
         except ValueError as exc:
             return create_error_response(str(exc))
 
@@ -341,11 +456,22 @@ class OpenAIServingResponses:
         """What is left of the context window once the prompt is counted.
 
         Upstream resolves this before generating and echoes it back as
-        `max_output_tokens`, so a request that asked for nothing still gets a number.
+        `max_output_tokens`, so a request that asked for nothing still gets a number,
+        and a request that asked for too much is clamped down to this rather than
+        rejected.
+
+        A prompt that does not fit at all is upstream's own 400 naming `input`, not
+        the engine's context-length error surfacing from three layers down.
         """
         max_model_len = self.engine.model_config.max_model_len
         assert max_model_len is not None
-        return max(1, max_model_len - len(self.engine.tokenizer.encode(prompt)))
+        prompt_len = len(self.engine.tokenizer.encode(prompt))
+        if prompt_len >= max_model_len:
+            raise ValueError(
+                f"The engine prompt length {prompt_len} exceeds the max_model_len "
+                f"{max_model_len}. Please reduce prompt."
+            )
+        return max_model_len - prompt_len
 
     async def _complete(
         self,
@@ -358,6 +484,9 @@ class OpenAIServingResponses:
         raw_request: Request | None,
         lora_request: Any = None,
     ) -> ResponsesResponse | JSONResponse:
+        # Read before generating. Upstream stamps `created_time` on arrival, so this
+        # is when the request came in -- not, as it was, when it finished.
+        created_at = self._created()
         final: RequestOutput | None = None
         try:
             async for output in self.engine.generate(
@@ -383,6 +512,7 @@ class OpenAIServingResponses:
             sampling_params,
             response_id=response_id,
             model_name=model_name,
+            created_at=created_at,
             final=final,
         )
         if request.store:
@@ -397,6 +527,7 @@ class OpenAIServingResponses:
         *,
         response_id: str,
         model_name: str,
+        created_at: int,
         final: RequestOutput,
     ) -> ResponsesResponse:
         completion = final.outputs[0]
@@ -413,7 +544,7 @@ class OpenAIServingResponses:
             sampling_params,
             response_id=response_id,
             model_name=model_name,
-            created_at=self._created(),
+            created_at=created_at,
             output=[
                 ResponseOutputMessage(
                     id=self._next_item_id(),
@@ -480,6 +611,23 @@ class OpenAIServingResponses:
             status_code=HTTPStatus.NOT_FOUND,
             param="response_id",
         )
+
+
+def _chat_template_kwargs(request: ResponsesRequest) -> dict[str, Any]:
+    """Fold `reasoning.effort` into the chat-template kwargs, as upstream does.
+
+    This is the whole of what `reasoning` means on a non-gpt-oss model: an effort
+    string the template may read, and an `enable_thinking` flag for templates that
+    require explicit opt-in. `enable_thinking` is only injected when the caller did
+    not set it themselves.
+    """
+    kwargs: dict[str, Any] = dict(request.chat_template_kwargs or {})
+    effort = (request.reasoning or {}).get("effort")
+    if effort is not None:
+        kwargs["reasoning_effort"] = effort
+        if "enable_thinking" not in kwargs:
+            kwargs["enable_thinking"] = effort != "none"
+    return kwargs
 
 
 def render_chat_prompt(

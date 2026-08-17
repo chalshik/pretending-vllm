@@ -87,6 +87,21 @@ class AsyncLLM:
     def from_engine_args(cls, engine_args: AsyncEngineArgs) -> AsyncLLM:
         return cls(engine_args.create_engine_config())
 
+    @property
+    def in_flight_request_ids(self) -> frozenset[str]:
+        """Ids with a live consumer. Read by `/v1/responses`, the one endpoint whose
+        request id the client chooses."""
+        return frozenset(self._queues)
+
+    def _reject_duplicate_request_id(self, request_id: str) -> None:
+        """Refuse an id already in flight, before any state is touched.
+
+        A duplicate is a client error, not an engine error: the right answer is to
+        fail *this* call and leave the request that got there first running.
+        """
+        if request_id in self._queues:
+            raise ValueError(f"request {request_id!r} is already in flight")
+
     # --- the output loop -----------------------------------------------------
 
     def _ensure_output_handler(self) -> None:
@@ -153,6 +168,17 @@ class AsyncLLM:
         """
         if self.errored:
             raise EngineDeadError(str(self._dead_error))
+
+        # Rejected *before* anything is mutated, and that ordering is load-bearing.
+        # The id is not always server-minted: `/v1/responses` lets a client choose it,
+        # which upstream documents, so a collision is reachable from outside.
+        # Registering the queue first silently rebinds the in-flight request's queue to
+        # this consumer, and the failure that follows then runs *this* call's `finally`
+        # against the *other* request -- its queue popped, its engine request aborted,
+        # and a stale scheduler entry left behind that kills the next `schedule()` with
+        # a KeyError, taking the output handler and every later request on every
+        # endpoint with it.
+        self._reject_duplicate_request_id(request_id)
 
         queue: asyncio.Queue[RequestOutput | PoolingRequestOutput | BaseException] = (
             asyncio.Queue()
@@ -231,6 +257,8 @@ class AsyncLLM:
         """
         if self.errored:
             raise EngineDeadError(str(self._dead_error))
+
+        self._reject_duplicate_request_id(request_id)
 
         queue: asyncio.Queue[RequestOutput | PoolingRequestOutput | BaseException] = (
             asyncio.Queue()

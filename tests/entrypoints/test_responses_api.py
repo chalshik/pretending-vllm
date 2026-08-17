@@ -13,6 +13,7 @@ it. So both positions of the flag are tested.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -280,11 +281,104 @@ async def test_the_stream_is_the_nine_documented_events_in_order(client):
         "response.output_text.done",
         "response.content_part.done",
         "response.output_item.done",
-        "response.incomplete",
+        "response.completed",
     ]
     # Everything between the prologue and the epilogue is a delta, one per step.
     assert set(types[4:-4]) == {"response.output_text.delta"}
     assert types.count("response.output_text.delta") == 3
+
+
+async def test_an_incomplete_response_still_ends_with_response_completed(client):
+    """vLLM v0.27.1 has no `response.incomplete` event: it is not in the
+    `StreamingResponsesResponse` union, so upstream's own TypeAdapter could not parse
+    one, and a client dispatching on the type would fall off the end of the stream.
+    Incompleteness rides *inside* `response.completed`, as the body's status.
+
+    This is the whole point of the test: the terminal type must not vary with the
+    outcome. `max_output_tokens=2` guarantees the incomplete outcome.
+    """
+    response = await client.post(
+        "/v1/responses",
+        json={"model": MODEL, "input": "hi", "stream": True, "max_output_tokens": 2},
+    )
+    frames = sse_frames(response.text)
+    types = [event_type for event_type, _ in frames]
+
+    assert "response.incomplete" not in types
+    assert types[-1] == "response.completed"
+
+    terminal = frames[-1][1]["response"]
+    assert terminal["status"] == "incomplete"
+    assert terminal["incomplete_details"] == {"reason": "max_output_tokens"}
+    # The *item* is complete even when the response is not: it finished, and it is
+    # the response that ran out of budget.
+    item_done = next(p for t, p in frames if t == "response.output_item.done")
+    assert item_done["item"]["status"] == "completed"
+
+
+async def test_a_generation_with_no_text_emits_only_three_events():
+    """Upstream opens the output item and content part lazily, on the first non-empty
+    delta, so a response that produces no text never opens them and has nothing to
+    close. Emitting the full nine would send a `content_part.done` for a part that was
+    never added, and a `logprobs: []` part a client would try to read.
+
+    Driven against a stub rather than the engine: the simulated model always produces
+    text, so this branch is otherwise unreachable and the test would silently skip.
+    """
+    from pvllm.entrypoints.openai.responses.protocol import ResponsesRequest
+    from pvllm.entrypoints.openai.responses.streaming import stream_responses
+    from pvllm.outputs import CompletionOutput, RequestOutput
+
+    class _Engine:
+        class engine_core:
+            clock_time = 1_700_000_000
+
+        async def generate(self, *args, **kwargs):
+            yield RequestOutput(
+                request_id="resp_x",
+                prompt="hi",
+                prompt_token_ids=[1, 2],
+                outputs=[
+                    CompletionOutput(
+                        index=0, text="", token_ids=[], finish_reason="stop"
+                    )
+                ],
+                finished=True,
+            )
+
+    class _Serving:
+        engine = _Engine()
+        _counter = 0
+
+        def _created(self):
+            return 1_700_000_000
+
+        def _next_item_id(self, prefix="msg"):
+            return f"{prefix}_0000000000000001"
+
+        def _next_bare_item_id(self):
+            return "0000000000000002"
+
+    request = ResponsesRequest(model=MODEL, input="hi", stream=True, store=False)
+    events = [
+        event
+        async for event in stream_responses(
+            _Serving(),
+            request,
+            response_id="resp_x",
+            model_name=MODEL,
+            prompt="hi",
+            sampling_params=request.to_sampling_params(16),
+            raw_request=None,
+        )
+    ]
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.in_progress",
+        "response.completed",
+    ]
+    # And the terminal body carries an empty output list, not a message with "".
+    assert events[-1]["payload"]["response"]["output"][0]["content"] == []
 
 
 async def test_the_stream_sends_no_done_sentinel(client):
@@ -371,9 +465,9 @@ async def test_the_streamed_text_matches_the_final_response(client):
     ("payload", "param"),
     [
         ({"tools": [{"type": "function", "name": "f"}]}, "tools"),
-        ({"reasoning": {"effort": "low"}}, "reasoning"),
-        ({"include": ["reasoning.encrypted_content"]}, "reasoning"),
         ({"prompt": {"id": "pmpt_1"}}, "prompt"),
+        ({"truncation": "auto"}, "truncation"),
+        ({"cache_salt": "tenant-a"}, "cache_salt"),
         ({"include": ["message.output_text.logprobs"]}, "include"),
         ({"previous_input_messages": [{"role": "user"}]}, "previous_input_messages"),
         ({"enable_response_messages": True}, "enable_response_messages"),
@@ -390,6 +484,278 @@ async def test_an_unmodelled_feature_is_refused_by_name(client, payload, param):
     error = response.json()["error"]
     assert error["type"] == "NotImplementedError"
     assert error["param"] == param
+
+
+async def test_reasoning_is_served_not_refused(client):
+    """`reasoning` does not select the harmony path. Upstream turns `effort` into a
+    chat-template kwarg and echoes the field back, so a stock server answers 200 --
+    refusing it was a C5/C7 divergence, not caution."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": "hi",
+            "reasoning": {"effort": "high"},
+            "max_output_tokens": 2,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["reasoning"] == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "include",
+    [
+        ["reasoning.encrypted_content"],
+        ["file_search_call.results"],
+        ["message.input_image.image_url"],
+    ],
+)
+async def test_include_values_other_than_logprobs_are_accepted_and_ignored(
+    client, include
+):
+    """Upstream's only consumer of `include` is the logprobs check; the other members
+    are validated by the Literal and then inert. Refusing them would 400 requests a
+    real vLLM serves."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": "hi",
+            "include": include,
+            "max_output_tokens": 2,
+        },
+    )
+    assert response.status_code == 200
+
+
+# --- the token budget -------------------------------------------------------
+
+
+async def test_an_oversized_max_output_tokens_is_clamped_not_rejected(client):
+    """Upstream folds the request's cap into `get_max_tokens` and takes the smaller of
+    it and the remaining window, so an over-budget ask is clamped into a 200. With
+    `or` instead of `min` the raw value reached SamplingParams and the engine's
+    context-length check turned it into a 400."""
+    response = await client.post(
+        "/v1/responses",
+        json={"model": MODEL, "input": "hello there", "max_output_tokens": 100_000},
+    )
+    assert response.status_code == 200
+    # Echoed back clamped, not as sent.
+    assert response.json()["max_output_tokens"] < 512
+
+
+async def test_an_explicit_zero_max_output_tokens_is_not_swallowed(client):
+    """`or` treated 0 as unset and handed the request the whole window. Upstream keeps
+    the 0 so the sampling params reject it."""
+    response = await client.post(
+        "/v1/responses",
+        json={"model": MODEL, "input": "hi", "max_output_tokens": 0},
+    )
+    assert response.status_code == 400
+
+
+async def test_a_prompt_that_does_not_fit_is_a_400_naming_input(client):
+    """Upstream's own validation, rather than the engine's context-length error
+    arriving from three layers down."""
+    response = await client.post(
+        "/v1/responses", json={"model": MODEL, "input": "token " * 2000}
+    )
+    assert response.status_code == 400
+    assert "max_model_len" in response.json()["error"]["message"]
+
+
+# --- structured outputs -----------------------------------------------------
+
+
+async def test_text_format_json_schema_uses_the_flat_responses_shape(client):
+    """`text.format` is a flat `ResponseFormatTextJSONSchemaConfig` -- the schema sits
+    at the top level, not nested under `json_schema` the way chat's `response_format`
+    does. Feeding it to the chat parser rejected every correct request with a 400
+    naming a key this endpoint does not have."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": "hi",
+            "max_output_tokens": 24,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "point",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}},
+                        "required": ["a"],
+                    },
+                    "strict": True,
+                }
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["output"][0]["content"][0]["text"].lstrip().startswith("{")
+
+
+async def test_the_chat_nested_shape_is_not_silently_accepted_here(client):
+    """The mirror of the above: the shape that used to work is the wrong one for this
+    endpoint, so it must no longer be quietly honoured."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": "hi",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "p", "schema": {"type": "object"}},
+                }
+            },
+        },
+    )
+    # No top-level `schema`, so there is nothing to constrain on: served unconstrained
+    # rather than 400-ing, which is what upstream's `return None` arm does.
+    assert response.status_code == 200
+
+
+async def test_structured_outputs_and_text_format_together_are_an_error(client):
+    """Upstream refuses the ambiguity rather than picking a precedence rule."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": "hi",
+            "text": {"format": {"type": "json_object"}},
+            "structured_outputs": {"json_object": True},
+        },
+    )
+    assert response.status_code == 400
+    assert "both" in response.json()["error"]["message"]
+
+
+# --- list-form input --------------------------------------------------------
+
+
+async def test_content_parts_are_resolved_to_their_text(client):
+    """Extending the message list with the raw items put the Python repr of a list of
+    dicts into the prompt. Observable through the token count: the structured form and
+    the plain string must cost the same."""
+    plain = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": [{"role": "user", "content": "the quick brown fox"}],
+            "max_output_tokens": 1,
+        },
+    )
+    parts = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "the quick brown fox"}],
+                }
+            ],
+            "max_output_tokens": 1,
+        },
+    )
+    assert plain.status_code == 200
+    assert parts.status_code == 200
+    assert (
+        parts.json()["usage"]["input_tokens"] == plain.json()["usage"]["input_tokens"]
+    )
+
+
+async def test_an_image_part_is_refused_rather_than_stringified(client):
+    """`/v1/responses` does not reach pvllm's multimodal path, so rendering an image
+    part as text would invent a caption and report a token count for it."""
+    response = await client.post(
+        "/v1/responses",
+        json={
+            "model": MODEL,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_image", "image_url": "http://example/x.png"}
+                    ],
+                }
+            ],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["type"] == "NotImplementedError"
+
+
+# --- created_at -------------------------------------------------------------
+
+
+async def test_created_at_is_stable_across_a_streamed_response(client):
+    """Read once, before generation. Reading the engine clock per event gave one
+    response two different `created_at` values, because the sim clock advances while
+    the model runs."""
+    response = await client.post(
+        "/v1/responses",
+        json={"model": MODEL, "input": "hi", "stream": True, "max_output_tokens": 8},
+    )
+    stamps = {
+        payload["response"]["created_at"]
+        for _, payload in sse_frames(response.text)
+        if "response" in payload
+    }
+    assert len(stamps) == 1
+
+
+# --- a client-chosen id that collides ---------------------------------------
+
+
+async def test_a_duplicate_in_flight_request_id_is_a_409_and_the_server_survives(
+    client,
+):
+    """`request_id` is client-settable and is also the engine's request id. A
+    collision used to rebind the running request's queue, then tear that request down
+    in this call's cleanup -- leaving a stale scheduler entry that killed the output
+    handler and every later request on every endpoint."""
+    body = {
+        "model": MODEL,
+        "input": "hi",
+        "request_id": "resp_collide",
+        "max_output_tokens": 64,
+    }
+    first, second = await asyncio.gather(
+        client.post("/v1/responses", json=body),
+        client.post("/v1/responses", json=body),
+        return_exceptions=True,
+    )
+    codes = sorted(r.status_code for r in (first, second))
+    assert codes == [200, 409]
+
+    # The server is still alive, and the id is reusable once nothing holds it.
+    again = await client.post("/v1/responses", json=body)
+    assert again.status_code == 200
+
+
+async def test_the_engine_itself_rejects_a_duplicate_request_id(client):
+    """The serving-layer 409 above is a check-then-act: between reading the in-flight
+    set and calling `generate`, the prompt is rendered and other coroutines run. The
+    guard that actually protects the engine is inside `AsyncLLM.generate`, so it is
+    pinned here directly rather than through the HTTP surface that shadows it.
+    """
+    from pvllm.sampling_params import SamplingParams
+
+    engine = client._transport.app.state.server.engine
+    params = SamplingParams(max_tokens=32)
+
+    first = engine.generate("hello", params, "dup-engine-id")
+    await first.__anext__()
+    try:
+        with pytest.raises(ValueError, match="already in flight"):
+            await engine.generate("hello", params, "dup-engine-id").__anext__()
+    finally:
+        await first.aclose()
 
 
 # --- the store, in both positions -------------------------------------------

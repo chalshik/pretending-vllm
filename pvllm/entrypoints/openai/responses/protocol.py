@@ -94,6 +94,12 @@ class ResponseOutputMessage(BaseModel):
     role: Literal["assistant"] = "assistant"
     status: ItemStatus = "completed"
     type: Literal["message"] = "message"
+    #: vLLM v0.27.1 declares `openai>=2.0.0`, but that floor is fiction: it imports
+    #: `NamespaceTool` from `openai.types.responses` at module scope, and that type
+    #: first exists in openai 2.25.0. Every openai from 2.24.0 carries `phase` on
+    #: this model, so every vLLM that can actually import its own Responses module
+    #: emits `"phase": null` here. Declared to match what a real server returns.
+    phase: Literal["commentary", "final_answer"] | None = None
 
 
 class IncompleteDetails(BaseModel):
@@ -212,7 +218,16 @@ class ResponsesRequest(BaseModel):
         back as `max_output_tokens` -- so a request that set nothing gets a number,
         not the `null` it sent.
         """
-        max_tokens = self.max_output_tokens or default_max_tokens
+        # `min`, not `or`. Upstream folds the request's own cap into
+        # `get_max_tokens` and takes the smallest of it and the remaining window, so
+        # an over-budget ask is *clamped* into a 200 rather than rejected. `or` also
+        # swallowed an explicit `max_output_tokens: 0`, which upstream keeps at 0 so
+        # SamplingParams can reject it.
+        max_tokens = (
+            default_max_tokens
+            if self.max_output_tokens is None
+            else min(self.max_output_tokens, default_max_tokens)
+        )
         stop = self.stop if self.stop else []
         if isinstance(stop, str):
             stop = [stop]
@@ -254,25 +269,58 @@ class ResponsesRequest(BaseModel):
             output_kind=(
                 RequestOutputKind.DELTA if self.stream else RequestOutputKind.FINAL_ONLY
             ),
-            structured_outputs=_structured_outputs_from_text(self.text),
+            structured_outputs=_extract_structured_outputs(
+                self.text, self.structured_outputs
+            ),
             extra_args=extra_args or None,
         )
 
 
-def _structured_outputs_from_text(text: dict[str, Any] | None) -> Any:
-    """R15. `text.format` is where this endpoint puts what chat calls
-    `response_format`.
+def _extract_structured_outputs(
+    text: dict[str, Any] | None, structured_outputs: dict[str, Any] | None
+) -> Any:
+    """R15. Upstream's `extract_structured_outputs`, ported.
 
-    Same machinery underneath, reached through a different field name -- so a JSON
-    schema sent to `/v1/responses` constrains decoding exactly as it would on
-    `/v1/chat/completions`.
+    The shape here is **not** the one `/v1/chat/completions` uses. Chat nests the
+    schema under a `json_schema` key; `text.format` is a flat
+    `ResponseFormatTextJSONSchemaConfig` -- `{"type","name","schema","strict"}` --
+    and upstream reads `schema` straight off the top. Handing this to the chat
+    parser rejected every correct request and accepted the wrong one.
+
+    `structured_outputs` is the vLLM-native alternative, used when `text.format` is
+    absent; asking for both is an error rather than a silent precedence rule.
     """
-    if not text:
-        return None
-    text_format = text.get("format")
+    text_format = (text or {}).get("format")
     if not isinstance(text_format, dict):
+        return _structured_outputs_params(structured_outputs)
+
+    if structured_outputs is not None:
+        raise ValueError("Cannot specify both structured_outputs and text.format")
+
+    kind = text_format.get("type")
+    if kind == "json_object":
+        return build_structured_outputs(response_format={"type": "json_object"})
+    if kind == "json_schema" and text_format.get("schema") is not None:
+        return build_structured_outputs(guided_json=text_format["schema"])
+    return None
+
+
+def _structured_outputs_params(structured_outputs: dict[str, Any] | None) -> Any:
+    """vLLM's own `structured_outputs` request field, which takes the same keys as
+    `StructuredOutputsParams` itself."""
+    if not structured_outputs:
         return None
-    return build_structured_outputs(response_format=text_format)
+    return build_structured_outputs(
+        guided_json=structured_outputs.get("json"),
+        guided_regex=structured_outputs.get("regex"),
+        guided_choice=structured_outputs.get("choice"),
+        guided_grammar=structured_outputs.get("grammar"),
+        structural_tag=structured_outputs.get("structural_tag"),
+        guided_whitespace_pattern=structured_outputs.get("whitespace_pattern"),
+        response_format=(
+            {"type": "json_object"} if structured_outputs.get("json_object") else None
+        ),
+    )
 
 
 class ResponsesResponse(BaseModel):
