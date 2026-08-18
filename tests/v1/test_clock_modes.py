@@ -113,7 +113,19 @@ def test_a_real_clock_actually_spends_the_modeled_duration():
 
     # The difference between the two runs is the sleeping, and nothing else: same
     # workload, same interpreter, same modeled durations.
-    assert real_wall - virtual_wall >= modeled * 0.5
+    #
+    # A quarter, not a half. This is a *differential* measurement, so noise in the
+    # subtrahend counts twice: on a loaded CI runner the virtual run is slowed by CPU
+    # contention, which shrinks the gap without the real run having slept any less.
+    # That is exactly how it failed on ubuntu/3.11 -- real 0.1857s, virtual 0.1664s,
+    # a 0.0192s gap against a 0.0205s threshold, for a modeled 0.0409s. Missing by
+    # 1.3ms says nothing about whether real mode sleeps.
+    #
+    # A quarter still discriminates the only thing worth pinning: a real clock that
+    # did not sleep at all leaves a gap of roughly zero, which fails at any positive
+    # threshold. Raising it back to a half buys no additional guarantee and buys back
+    # the flake.
+    assert real_wall - virtual_wall >= modeled * 0.25
 
 
 def test_a_scaled_clock_compresses_the_same_run():

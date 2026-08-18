@@ -69,7 +69,7 @@ def test_latency_reports_a_modeled_duration(tmp_path, capsys):
     )
     assert "MODELED" in capsys.readouterr().out
 
-    payload = json.loads(out.read_text())
+    payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["completed"] == 4
     assert payload["total_output_tokens"] == 32
     assert payload["duration_s"] > 0
@@ -96,7 +96,7 @@ def test_latency_iterations_repeat_exactly_without_jitter(tmp_path):
         "--output-json",
         str(out),
     )
-    durations = json.loads(out.read_text())["iteration_durations_s"]
+    durations = json.loads(out.read_text(encoding="utf-8"))["iteration_durations_s"]
     assert len(set(durations)) == 1, durations
 
 
@@ -119,7 +119,7 @@ def test_throughput_reports_upstream_field_names(tmp_path):
         == 0
     )
 
-    payload = json.loads(out.read_text())
+    payload = json.loads(out.read_text(encoding="utf-8"))
     for field in (
         "request_throughput",
         "output_throughput",
@@ -155,7 +155,7 @@ def test_serve_honours_the_request_rate(tmp_path):
         == 0
     )
 
-    payload = json.loads(out.read_text())
+    payload = json.loads(out.read_text(encoding="utf-8"))
     # Eleven gaps at ~20/s is ~0.55s of arrivals alone, and the run cannot be
     # shorter than the schedule that produced it.
     assert payload["duration_s"] > 0.4
@@ -336,8 +336,8 @@ def test_a_shared_prefix_raises_the_hit_rate_and_cuts_the_work(tmp_path):
         str(distinct),
     )
 
-    with_prefix = json.loads(shared.read_text())
-    without = json.loads(distinct.read_text())
+    with_prefix = json.loads(shared.read_text(encoding="utf-8"))
+    without = json.loads(distinct.read_text(encoding="utf-8"))
 
     assert with_prefix["prefix_cache_hit_rate"] > without["prefix_cache_hit_rate"]
     # Asserted on steps rather than on duration because steps are exact and duration

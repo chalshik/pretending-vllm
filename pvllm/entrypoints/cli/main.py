@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.output:
             from pathlib import Path
 
-            Path(args.output).write_text(rendered)
+            Path(args.output).write_text(rendered, encoding="utf-8")
             print(f"wrote {args.output}", file=sys.stderr)
         else:
             print(rendered)

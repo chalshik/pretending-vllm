@@ -110,7 +110,9 @@ def test_an_abort_the_core_never_held_writes_no_trace_record(tmp_path):
 
     aborted = {
         record["request_id"]
-        for record in (json.loads(line) for line in path.read_text().splitlines())
+        for record in (
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        )
         if record.get("event") == "aborted"
     }
     assert aborted == {"0_client-request", "1_client-request"}

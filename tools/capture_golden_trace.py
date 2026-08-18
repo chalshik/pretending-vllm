@@ -174,7 +174,7 @@ def _capture_metrics(output_dir: Path, *, force: bool) -> int:
 
     path = output_dir / "metrics.json"
     if path.exists() and not force:
-        existing = json.loads(path.read_text())
+        existing = json.loads(path.read_text(encoding="utf-8"))
         if existing == families:
             print(f"metrics: unchanged ({len(families)} families)")
             return 0
@@ -183,7 +183,9 @@ def _capture_metrics(output_dir: Path, *, force: bool) -> int:
         return 1
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(families, indent=2, sort_keys=True) + "\n")
+    path.write_text(
+        json.dumps(families, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(f"metrics: recorded {len(families)} families -> {path}")
     return 0
 

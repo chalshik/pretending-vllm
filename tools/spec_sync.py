@@ -106,13 +106,13 @@ def find_upstream_dir() -> Path | None:
 def parse_module(path: Path) -> ModuleRecord:
     rel = str(path.relative_to(REPO_ROOT))
     try:
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except SyntaxError as exc:
         return ModuleRecord(rel, None, None, f"syntax error: {exc}")
 
     docstring = ast.get_docstring(tree)
     if not docstring:
-        if path.name == "__init__.py" and not path.read_text().strip():
+        if path.name == "__init__.py" and not path.read_text(encoding="utf-8").strip():
             return ModuleRecord(rel, None, None)  # empty package marker
         return ModuleRecord(rel, None, None, "no module docstring (NF5)")
 

@@ -74,7 +74,7 @@ def _collect() -> tuple[dict[str, list[tuple[Path, int]]], set[str]]:
     for root in READ_ROOTS:
         for path in root.rglob("*.py"):
             try:
-                tree = ast.parse(path.read_text())
+                tree = ast.parse(path.read_text(encoding="utf-8"))
             except SyntaxError:  # pragma: no cover - the suite would be failing anyway
                 continue
             record = path.is_relative_to(PACKAGE)

@@ -390,7 +390,7 @@ def load_model_card(name: str) -> ModelCard:
     """Resolve a model name, Hugging Face id, or card path to a `ModelCard`."""
     candidate = Path(name)
     if candidate.suffix == ".json" and candidate.is_file():
-        return ModelCard.from_dict(json.loads(candidate.read_text()))
+        return ModelCard.from_dict(json.loads(candidate.read_text(encoding="utf-8")))
 
     resolved = ALIASES.get(name, name)
     path = MODELS_DIR / f"{resolved}.json"
@@ -402,4 +402,4 @@ def load_model_card(name: str) -> ModelCard:
             f"the SimConfig `model_card` field. pretending-vllm will not invent an "
             f"architecture -- the memory and latency numbers would be fiction."
         )
-    return ModelCard.from_dict(json.loads(path.read_text()))
+    return ModelCard.from_dict(json.loads(path.read_text(encoding="utf-8")))

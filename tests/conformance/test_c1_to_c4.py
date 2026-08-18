@@ -113,7 +113,7 @@ def test_the_contract_is_still_asserted_not_verified() -> None:
     promote the contract in the README rather than leaving it understated.
     """
     sources = {golden(name).source for name in WORKLOAD_NAMES}
-    readme = (Path(__file__).parents[2] / "README.md").read_text()
+    readme = (Path(__file__).parents[2] / "README.md").read_text(encoding="utf-8")
 
     if sources == {"vllm"}:
         pytest.fail(

@@ -166,7 +166,8 @@ def real_tokenizer_dir(tmp_path_factory):
     )
     tokenizer.save(str(path / "tokenizer.json"))
     (path / "tokenizer_config.json").write_text(
-        json.dumps({"bos_token": "<s>", "eos_token": "</s>"})
+        json.dumps({"bos_token": "<s>", "eos_token": "</s>"}),
+        encoding="utf-8",
     )
     return path
 
@@ -392,7 +393,7 @@ def test_a_dummy_step_lands_on_the_scheduler_s_step_axis(tmp_path):
     idle = tmp_path / "t.dp1.jsonl"
     steps = [
         json.loads(line)
-        for line in idle.read_text().splitlines()
+        for line in idle.read_text(encoding="utf-8").splitlines()
         if json.loads(line).get("dummy")
     ]
     assert [record["step"] for record in steps] == list(range(1, 9))

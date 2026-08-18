@@ -152,7 +152,7 @@ class HFTokenizer:
         if not path.is_file():
             return {}
         try:
-            loaded = json.loads(path.read_text())
+            loaded = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             return {}
         return loaded if isinstance(loaded, dict) else {}

@@ -56,7 +56,8 @@ def tokenizer_dir(tmp_path_factory):
                 "pad_token": "<pad>",
                 "chat_template": CHAT_TEMPLATE,
             }
-        )
+        ),
+        encoding="utf-8",
     )
     return path
 

@@ -59,7 +59,15 @@ def _python_files() -> list[Path]:
 
 
 def _relative(path: Path) -> str:
-    return str(path.relative_to(PACKAGE_ROOT.parent))
+    """Repo-relative, always with forward slashes.
+
+    Every exemption in this file -- WALL_CLOCK_CLIENTS, the debug-router prefix, the
+    clock-advance allowlist -- is written with forward slashes. `str(Path)` yields
+    backslashes on Windows, so none of them matched there and three separate checks
+    failed on the very paths they were meant to exempt. Same bug the vendor manifest
+    had, same fix.
+    """
+    return path.relative_to(PACKAGE_ROOT.parent).as_posix()
 
 
 def _is_sim(path: Path) -> bool:
@@ -67,7 +75,7 @@ def _is_sim(path: Path) -> bool:
 
 
 def _parse(path: Path) -> ast.Module:
-    return ast.parse(path.read_text(), filename=str(path))
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
 def _imported_module_roots(tree: ast.Module) -> set[str]:
@@ -333,7 +341,7 @@ def test_module_declares_upstream_and_tier(path: Path) -> None:
     docstring = ast.get_docstring(_parse(path))
     rel = _relative(path)
 
-    if path.name == "__init__.py" and not (path.read_text().strip()):
+    if path.name == "__init__.py" and not (path.read_text(encoding="utf-8").strip()):
         pytest.skip("empty package marker")
 
     assert docstring, f"{rel}: module has no docstring; NF5 requires an Upstream header"
@@ -371,7 +379,7 @@ def test_the_clock_advances_only_for_device_work() -> None:
         rel = _relative(path)
         if rel in allowed:
             continue
-        source = path.read_text()
+        source = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(source.splitlines(), start=1):
             if ".advance(" in line or ".advance_async(" in line:
                 violations.append(f"{rel}:{lineno}: {line.strip()}")

@@ -47,7 +47,7 @@ class Mutation:
 
 
 def load(path: Path = CATALOGUE) -> list[Mutation]:
-    raw = tomllib.loads(path.read_text())
+    raw = tomllib.loads(path.read_text(encoding="utf-8"))
     return [Mutation(**entry) for entry in raw["mutation"]]
 
 
@@ -140,7 +140,7 @@ def run_one(mutation: Mutation, *, verbose: bool = False) -> tuple[bool, str]:
     ):
         return False, f"{mutation.file} has uncommitted changes; refusing to mutate it"
 
-    original = target.read_text()
+    original = target.read_text(encoding="utf-8")
 
     occurrences = original.count(mutation.old)
     if occurrences == 0:
@@ -161,11 +161,13 @@ def run_one(mutation: Mutation, *, verbose: bool = False) -> tuple[bool, str]:
         return False, "the named test ALREADY fails before the mutation is applied"
 
     try:
-        target.write_text(original.replace(mutation.old, mutation.new, 1))
+        target.write_text(
+            original.replace(mutation.old, mutation.new, 1), encoding="utf-8"
+        )
         _invalidate_bytecode(target)
         result = _run_test(mutation.test)
     finally:
-        target.write_text(original)
+        target.write_text(original, encoding="utf-8")
         _invalidate_bytecode(target)
 
     if verbose:

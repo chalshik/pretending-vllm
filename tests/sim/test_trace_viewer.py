@@ -199,16 +199,20 @@ def test_the_cli_writes_svg_to_a_file(tmp_path):
     path = run_traced(tmp_path)
     out = tmp_path / "timeline.svg"
     assert main(["trace", "view", path, "--format", "svg", "-o", str(out)]) == 0
-    assert out.read_text().startswith("<svg")
+    assert out.read_text(encoding="utf-8").startswith("<svg")
 
 
 def test_a_truncated_trace_is_reported_as_broken(tmp_path):
     """Not as a behavioural difference: a conformance diff must distinguish
     'records were lost' from 'the engine did something else'."""
-    original = pathlib.Path(run_traced(tmp_path)).read_text().splitlines(keepends=True)
+    original = (
+        pathlib.Path(run_traced(tmp_path))
+        .read_text(encoding="utf-8")
+        .splitlines(keepends=True)
+    )
 
     truncated = tmp_path / "truncated.jsonl"
-    truncated.write_text("".join(original[:2] + original[3:]))
+    truncated.write_text("".join(original[:2] + original[3:]), encoding="utf-8")
 
     with pytest.raises(ValueError, match="trace discontinuity"):
         summarize(truncated)

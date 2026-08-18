@@ -199,7 +199,7 @@ def test_metric_surface_matches_its_golden():
             "no metric-surface golden. Write one with:\n"
             "    python tools/capture_golden_trace.py --metrics"
         )
-    golden = json.loads(path.read_text())
+    golden = json.loads(path.read_text(encoding="utf-8"))
 
     recorded_names = {entry["name"] for entry in recorded}
     golden_names = {entry["name"] for entry in golden}

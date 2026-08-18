@@ -181,11 +181,14 @@ class ConformanceRecord:
     def write(self, path: str | Path) -> None:
         resolved = Path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n")
+        resolved.write_text(
+            json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     @classmethod
     def read(cls, path: str | Path) -> ConformanceRecord:
-        payload = json.loads(Path(path).read_text())
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
         version = payload.get("schema_version")
         if version != CONFORMANCE_SCHEMA_VERSION:
             raise ValueError(

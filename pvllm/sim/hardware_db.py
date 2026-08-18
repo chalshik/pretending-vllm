@@ -101,7 +101,7 @@ def load_device_card(name: str) -> DeviceCard:
     """
     candidate = Path(name)
     if candidate.suffix == ".json" and candidate.is_file():
-        return DeviceCard.from_dict(json.loads(candidate.read_text()))
+        return DeviceCard.from_dict(json.loads(candidate.read_text(encoding="utf-8")))
 
     path = HARDWARE_DIR / f"{name}.json"
     if not path.is_file():
@@ -109,7 +109,7 @@ def load_device_card(name: str) -> DeviceCard:
             f"unknown device card {name!r}; bundled cards are "
             f"{list(available_device_cards())}, or pass a path to a JSON file"
         )
-    return DeviceCard.from_dict(json.loads(path.read_text()))
+    return DeviceCard.from_dict(json.loads(path.read_text(encoding="utf-8")))
 
 
 _active_card: DeviceCard | None = None

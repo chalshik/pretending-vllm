@@ -82,7 +82,7 @@ def read_manifest() -> dict[str, str]:
     if not MANIFEST_PATH.is_file():
         return {}
     entries: dict[str, str] = {}
-    for line in MANIFEST_PATH.read_text().splitlines():
+    for line in MANIFEST_PATH.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -99,7 +99,7 @@ def write_manifest(manifest: dict[str, str]) -> None:
         "",
     ]
     lines += [f"{digest}  {rel}" for rel, digest in sorted(manifest.items())]
-    MANIFEST_PATH.write_text("\n".join(lines) + "\n")
+    MANIFEST_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _wanted(member_path: str) -> bool:

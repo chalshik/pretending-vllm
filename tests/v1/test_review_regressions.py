@@ -156,7 +156,7 @@ def test_bench_latency_reports_per_iteration_steps(tmp_path):
             str(out),
         ]
     )
-    payload = json.loads(out.read_text())
+    payload = json.loads(out.read_text(encoding="utf-8"))
     # One iteration's worth: 8 output tokens over a batch of 2 is well under 30
     # steps. The lifetime counter after three iterations would be triple.
     assert payload["num_steps"] < 30, payload["num_steps"]

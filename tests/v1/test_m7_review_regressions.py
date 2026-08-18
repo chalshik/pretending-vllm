@@ -132,7 +132,7 @@ def test_a_card_that_declares_half_of_mla_is_refused_by_name():
 
     from pvllm.sim.model_db import ModelCard
 
-    card = json.loads(Path("pvllm/sim/models/mla-16b.json").read_text())
+    card = json.loads(Path("pvllm/sim/models/mla-16b.json").read_text(encoding="utf-8"))
     card.pop("qk_rope_head_dim")
     with pytest.raises(ValueError, match="qk_rope_head_dim"):
         ModelCard.from_dict(card)

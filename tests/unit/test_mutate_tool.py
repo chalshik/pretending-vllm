@@ -49,7 +49,7 @@ def test_a_real_mutation_is_reported_as_caught():
 def test_a_mutation_nothing_notices_is_reported_as_a_miss(probe):
     """The case the whole tool exists to surface: the edit lands, the named test still
     passes, and that is a finding rather than a success."""
-    probe.write_text("VALUE = 1  # a comment\n")
+    probe.write_text("VALUE = 1  # a comment\n", encoding="utf-8")
     entry = mutate.Mutation(
         name="probe",
         why="a comment change cannot affect any test",
@@ -66,7 +66,7 @@ def test_a_mutation_nothing_notices_is_reported_as_a_miss(probe):
 def test_a_drifted_anchor_is_reported_rather_than_skipped(probe):
     """An entry whose `old` no longer appears has been pinning nothing, possibly for
     a long time. Silence here would be the worst outcome available."""
-    probe.write_text("VALUE = 1\n")
+    probe.write_text("VALUE = 1\n", encoding="utf-8")
     entry = mutate.Mutation(
         name="probe",
         why="...",
@@ -83,7 +83,7 @@ def test_a_drifted_anchor_is_reported_rather_than_skipped(probe):
 def test_an_ambiguous_anchor_is_reported(probe):
     """Two matches means the edit lands somewhere unintended, so the run proves
     nothing about the line the entry meant."""
-    probe.write_text("VALUE = 1\nVALUE = 1\n")
+    probe.write_text("VALUE = 1\nVALUE = 1\n", encoding="utf-8")
     entry = mutate.Mutation(
         name="probe",
         why="...",
@@ -100,7 +100,7 @@ def test_an_ambiguous_anchor_is_reported(probe):
 def test_a_missing_test_is_not_mistaken_for_a_catch(probe):
     """pytest exits non-zero when it collects nothing, which naively reads as "the
     mutation was noticed". A typo in a node id would then look like coverage."""
-    probe.write_text("VALUE = 1\n")
+    probe.write_text("VALUE = 1\n", encoding="utf-8")
     entry = mutate.Mutation(
         name="probe",
         why="...",
@@ -123,9 +123,9 @@ def test_an_already_failing_test_is_not_mistaken_for_a_catch(probe, tmp_path):
     when you want to ask whether the test guards anything. A half-written test would
     then have every entry naming it certified as coverage.
     """
-    probe.write_text("VALUE = 1\n")
+    probe.write_text("VALUE = 1\n", encoding="utf-8")
     failing = mutate.REPO / "tests" / "unit" / "test_mutate_probe_failing.py"
-    failing.write_text("def test_always_fails():\n    assert False\n")
+    failing.write_text("def test_always_fails():\n    assert False\n", encoding="utf-8")
     try:
         entry = mutate.Mutation(
             name="probe",
@@ -146,7 +146,7 @@ def test_the_source_is_restored_even_when_the_test_fails(probe):
     """The edit is undone in a `finally`, so a failing run does not leave the tree
     mutated -- which is how a mutation could otherwise end up committed."""
     body = "VALUE = 1\n"
-    probe.write_text(body)
+    probe.write_text(body, encoding="utf-8")
     entry = mutate.Mutation(
         name="probe",
         why="...",
@@ -156,7 +156,7 @@ def test_the_source_is_restored_even_when_the_test_fails(probe):
         test=REAL_TEST,
     )
     mutate.run_one(entry)
-    assert probe.read_text() == body
+    assert probe.read_text(encoding="utf-8") == body
 
 
 def test_a_same_size_mutation_leaves_no_stale_bytecode():
@@ -192,7 +192,7 @@ def test_a_same_size_mutation_leaves_no_stale_bytecode():
 
     caught, detail = mutate.run_one(entry)
     assert caught, f"the mutation was not detected: {detail}"
-    assert entry.old in target.read_text()
+    assert entry.old in target.read_text(encoding="utf-8")
 
 
 def test_every_catalogue_entry_names_a_test_that_exists():
@@ -203,7 +203,7 @@ def test_every_catalogue_entry_names_a_test_that_exists():
     for entry in mutate.load():
         path = mutate.REPO / entry.test.split("::")[0]
         name = entry.test.split("::")[-1]
-        if not path.exists() or f"def {name}(" not in path.read_text():
+        if not path.exists() or f"def {name}(" not in path.read_text(encoding="utf-8"):
             missing.append(entry.name)
     assert not missing, f"catalogue entries naming a missing test: {missing}"
 
@@ -217,7 +217,7 @@ def test_every_catalogue_anchor_is_unique_in_its_file():
         if not target.exists():
             problems.append(f"{entry.name}: {entry.file} does not exist")
             continue
-        count = target.read_text().count(entry.old)
+        count = target.read_text(encoding="utf-8").count(entry.old)
         if count != 1:
             problems.append(f"{entry.name}: anchor appears {count} times")
     assert not problems, "\n".join(problems)
