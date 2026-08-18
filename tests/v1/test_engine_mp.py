@@ -41,7 +41,19 @@ def client():
 
 
 def drain(client, request_ids: set[str], limit: int = 200) -> dict[str, list]:
-    """Step until every named request finishes."""
+    """Step until every named request finishes.
+
+    An empty poll is *not* a stopping condition while requests are still outstanding.
+    `get_output` returns `{}` when the engine reports no pending work, and there is a
+    window right after `add_request` where that is true simply because the message is
+    still in flight -- the frontend has sent it and the child has not yet enqueued it.
+    Breaking there raced the child on a loaded runner and made the test report that
+    nothing finished, which is how it failed on macOS/3.13 while passing everywhere
+    else.
+
+    The caller knows what it submitted, so that is the loop condition; `limit` is the
+    backstop for a genuinely stuck engine.
+    """
     tokens: dict[str, list[int]] = {req_id: [] for req_id in request_ids}
     events: dict[str, list] = {req_id: [] for req_id in request_ids}
     finished: set[str] = set()
@@ -50,7 +62,7 @@ def drain(client, request_ids: set[str], limit: int = 200) -> dict[str, list]:
             break
         outputs = client.get_output()
         if not outputs:
-            break
+            continue
         for client_outputs in outputs.values():
             for output in client_outputs.outputs:
                 tokens[output.request_id].extend(output.new_token_ids)
