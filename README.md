@@ -332,4 +332,7 @@ pin. `tests/unit/test_purity.py` enforces the simulation boundary: no clock, no 
 
 ## License
 
-Apache-2.0, matching upstream vLLM.
+Apache-2.0, matching upstream vLLM. See [LICENSE](LICENSE) for the terms and
+[NOTICE](NOTICE) for the attribution: this is a derivative work of
+[vLLM](https://github.com/vllm-project/vLLM), pinned at v0.27.1, and every module
+names its upstream counterpart and fidelity tier in its header.

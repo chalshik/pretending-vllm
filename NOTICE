@@ -1,0 +1,33 @@
+pretending-vllm
+Copyright 2026 Nurmukhammed Kalmamatov
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+------------------------------------------------------------------------------
+Attribution
+------------------------------------------------------------------------------
+
+This project is a derivative work of vLLM (https://github.com/vllm-project/vllm),
+Copyright the vLLM Team, licensed under the Apache License, Version 2.0.
+
+It is a deliberate reimplementation rather than an incidental one: the engine's
+control plane -- the scheduler, the KV cache manager and block pool, the request
+lifecycle, the OpenAI-compatible HTTP surface -- is ported from vLLM so that a client
+cannot tell the two apart, while the device and the model underneath are simulated.
+The pinned upstream revision is v0.27.1, recorded with per-file hashes in
+vendor/MANIFEST.sha256 and documented in UPSTREAM.md.
+
+Every module states its upstream counterpart and its fidelity tier in its header:
+
+  Tier A  line-for-line with upstream; a behavioural divergence is a bug
+  Tier B  signature-faithful, body-thinned
+  Tier C  shape-only -- field names, types and validation intent match
+  Tier D  invented; no upstream counterpart (pvllm/sim/, pvllm/platforms/sim.py)
+
+Tier A and Tier B modules are the derivative portion. Tier D is original to this
+project. `tools/spec_sync.py` checks in CI that every declared counterpart still
+exists at the pin, so the attribution above cannot silently go stale.
+
+The vendored copy of upstream under vendor/ is a read-only reference fetched at setup
+time. It is not redistributed here: it is excluded by .gitignore, and only its hash
+manifest is committed.
