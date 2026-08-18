@@ -369,3 +369,48 @@ async def test_readiness_reports_true_only_after_startup():
     assert await engine.is_ready()
     await engine.check_health()
     engine.shutdown()
+
+
+async def test_a_stop_string_aborts_in_the_core_on_the_async_path_too():
+    """R11.5 has two implementations and had one test.
+
+    `LLMEngine.step()` and `AsyncLLM._run_output_handler` each detect a stop string in
+    the frontend and must then tell the core, because the scheduler does not know the
+    request ended. Only the synchronous one was covered -- and the async one is the
+    path `pvllm serve` and every HTTP endpoint take. Deleting its `abort_requests`
+    call left the whole suite green while a served request kept generating into blocks
+    nobody would ever read.
+    """
+    # The marker comes from the async engine's own output, under the SAME request id.
+    # R19.2 derives each request's RNG from `(seed, request_id)`, so text is
+    # reproducible per id and differs between ids -- take a slice of a run under a
+    # different id and it simply never appears, the request ends on length, and the
+    # test passes while proving nothing.
+    baseline = make_async_engine()
+    try:
+        text = ""
+        async for output in baseline.generate(
+            "hi", SamplingParams(max_tokens=40), "s0"
+        ):
+            text = output.outputs[0].text
+    finally:
+        baseline.shutdown()
+    marker = text[8:12]
+
+    engine = make_async_engine()
+    try:
+        final = None
+        async for output in engine.generate(
+            "hi", SamplingParams(max_tokens=40, stop=[marker]), "s0"
+        ):
+            final = output
+
+        assert final is not None
+        assert final.outputs[0].finish_reason == "stop"
+        assert marker not in final.outputs[0].text
+        assert len(final.outputs[0].text) < len(text)
+
+        # The core was told. Without the abort the request stays running there.
+        assert (await engine.make_stats())["kv_cache_usage"] == 0.0
+    finally:
+        engine.shutdown()

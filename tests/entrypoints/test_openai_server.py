@@ -327,12 +327,23 @@ async def test_n_greater_than_one_streams_every_choice(client):
         },
     )
     assert response.status_code == 200
-    indices = set()
+
+    # Unioning indices across *all* chunks proves nothing: the leading role chunk
+    # already emits one choice per index, so every content chunk could be mislabelled
+    # index 0 and the union would still be {0, 1}. R11.7 is that a piece of generated
+    # text belongs to a particular choice, so accumulate text per index and check both
+    # choices actually received their own.
+    text: dict[int, str] = {}
     for event in sse_events(response.text):
-        if isinstance(event, dict):
-            for choice in event.get("choices", ()):
-                indices.add(choice["index"])
-    assert indices == {0, 1}
+        if not isinstance(event, dict):
+            continue
+        for choice in event.get("choices", ()):
+            content = (choice.get("delta") or {}).get("content")
+            if content:
+                text[choice["index"]] = text.get(choice["index"], "") + content
+
+    assert set(text) == {0, 1}, f"content arrived for choices {sorted(text)}"
+    assert all(value for value in text.values()), "a choice streamed no content"
 
 
 async def test_an_invalid_sampling_parameter_is_400(client):

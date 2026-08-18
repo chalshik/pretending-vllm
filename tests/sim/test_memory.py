@@ -58,8 +58,22 @@ def test_kv_bytes_per_block_scales_with_block_size():
 
 
 def test_num_gpu_blocks_is_the_pool_divided_by_block_size():
+    """Both operands independently derived, not read back off the same profile.
+
+    `num_gpu_blocks` *is* `kv_pool_bytes // kv_bytes_per_block` a few lines above the
+    return, so comparing the profile's own fields is an identity that holds for any
+    scale error -- doubling `kv_bytes_per_block` moved both sides together and the
+    whole suite stayed green. The block size and the per-token cost come from the
+    cards instead, so the arithmetic has something to be wrong against.
+    """
+    from pvllm.sim.model_db import load_model_card
+
     profile = profile_for()
-    assert profile.num_gpu_blocks == profile.kv_pool_bytes // profile.kv_bytes_per_block
+    card = load_model_card("dense-8b")
+
+    expected_per_block = 16 * card.kv_bytes_per_token("bfloat16")
+    assert profile.kv_bytes_per_block == expected_per_block
+    assert profile.num_gpu_blocks == profile.kv_pool_bytes // expected_per_block
 
 
 def test_max_concurrency_is_blocks_of_context_over_context():

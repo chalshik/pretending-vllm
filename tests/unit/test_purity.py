@@ -58,6 +58,21 @@ def _python_files() -> list[Path]:
     return sorted(p for p in PACKAGE_ROOT.rglob("*.py"))
 
 
+def _attribute_root(node: ast.Attribute) -> str | None:
+    """The leftmost name in a dotted access, however deep.
+
+    `datetime.datetime.now` nests an Attribute inside an Attribute, so a check that
+    only looked at `node.value` being an `ast.Name` saw `Attribute` and recorded
+    nothing -- the single most important spelling this lint exists to forbid walked
+    straight past it. `now` and `utcnow` had been in FORBIDDEN_TIME_ATTRS since M6a
+    precisely because of `datetime.datetime.now()`; the matcher could never reach
+    them. Found by mutation-testing the lint itself.
+    """
+    while isinstance(node.value, ast.Attribute):
+        node = node.value
+    return node.value.id if isinstance(node.value, ast.Name) else None
+
+
 def _relative(path: Path) -> str:
     """Repo-relative, always with forward slashes.
 
@@ -153,10 +168,10 @@ def test_no_wall_clock_outside_sim() -> None:
             # `time.time()` style attribute access, even if `time` came in some
             # other way.
             elif isinstance(node, ast.Attribute) and node.attr in FORBIDDEN_TIME_ATTRS:
-                value = node.value
-                if isinstance(value, ast.Name) and value.id in {"time", "datetime"}:
+                root = _attribute_root(node)
+                if root in {"time", "datetime"}:
                     violations.append(
-                        f"{_relative(path)}:{node.lineno}: reads {value.id}.{node.attr}"
+                        f"{_relative(path)}:{node.lineno}: reads {root}.{node.attr}"
                     )
 
     assert not violations, (
@@ -387,3 +402,28 @@ def test_the_clock_advances_only_for_device_work() -> None:
         "only the device (and the two sites that charge on its behalf) may advance "
         "the clock:\n" + "\n".join(violations)
     )
+
+
+def test_the_lint_follows_a_dotted_attribute_chain():
+    """The matcher, tested directly, because the wire-level checks cannot reach it.
+
+    `datetime.datetime.now` nests an Attribute inside an Attribute. A matcher that
+    only inspected `node.value` for an `ast.Name` saw an `Attribute`, recorded
+    nothing, and let the single most important forbidden spelling through -- while
+    `now` and `utcnow` sat in FORBIDDEN_TIME_ATTRS looking like coverage. Found by
+    mutation-testing the lint itself, which is the only way a hole in a guard shows up.
+    """
+
+    def root_of(expression: str) -> str | None:
+        node = ast.parse(expression, mode="eval").body
+        assert isinstance(node, ast.Attribute)
+        return _attribute_root(node)
+
+    assert root_of("time.perf_counter") == "time"
+    assert root_of("datetime.datetime.now") == "datetime"
+    assert root_of("datetime.datetime.utcnow") == "datetime"
+    # Arbitrarily deep, and unrelated roots are reported as themselves so the caller
+    # can decide -- the check is `root in {"time", "datetime"}`, not "is it a Name".
+    assert root_of("a.b.c.d.now") == "a"
+    # A call in the chain has no static root; returning None must not raise.
+    assert root_of("f().now") is None

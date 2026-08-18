@@ -252,27 +252,58 @@ def test_aborting_a_waiting_request_removes_it_from_the_queue():
 
 
 def test_preemption_frees_blocks_and_requeues_at_the_front():
-    """R5.5. By recompute: computed tokens reset, output tokens kept."""
+    """R5.5. By recompute: the victim's blocks go back to the pool, its computed
+    tokens reset, and it is requeued at the *head* of the waiting queue -- ahead of
+    anything already queued when it was preempted.
+
+    The workload carries a third request for a reason. With only two requests, both
+    admitted on the first `schedule()`, the waiting queue is empty when preemption
+    fires, so the victim is its only element and prepending is byte-identical to
+    appending: front-vs-back is unobservable in principle, whatever the test asserts.
+    That is how `prepend_request` -> `add_request` used to pass here, and pass the
+    whole suite -- the C4 goldens record `waiting_req_ids` sorted and `num_waiting` as
+    a count, so queue *order* is invisible to them too.
+    """
     # Four blocks total; two requests of 8 tokens each need two blocks apiece.
     scheduler = make_scheduler(num_blocks=4, block_size=4, max_num_batched_tokens=64)
-    scheduler.add_request(make_request("a", prompt_len=8, max_tokens=16))
-    scheduler.add_request(make_request("b", prompt_len=8, max_tokens=16))
+    requests = {
+        "a": make_request("a", prompt_len=8, max_tokens=16),
+        "b": make_request("b", prompt_len=8, max_tokens=16),
+    }
+    scheduler.add_request(requests["a"])
+    scheduler.add_request(requests["b"])
 
     output = scheduler.schedule()
     scheduler.update_from_output(output, runner_output(scheduler, output))
 
-    # Both are now decoding into a pool with no spare blocks; the next append
-    # forces a preemption.
-    preempted_seen = False
+    # A third request the exhausted pool cannot admit. It sits in the queue, which is
+    # what makes the victim's position observable at all.
+    requests["c"] = make_request("c", prompt_len=8, max_tokens=16)
+    scheduler.add_request(requests["c"])
+
+    preempted_ids: set[str] = set()
+    usage_before = 0.0
     for _ in range(6):
+        usage_before = scheduler.kv_cache_manager.usage
         output = scheduler.schedule()
         if output.preempted_req_ids:
-            preempted_seen = True
+            preempted_ids = set(output.preempted_req_ids)
             break
         scheduler.update_from_output(output, runner_output(scheduler, output))
 
-    assert preempted_seen, "a full KV pool must eventually force preemption"
+    assert preempted_ids, "a full KV pool must eventually force preemption"
     assert scheduler.num_preemptions_total >= 1
+    assert preempted_ids == {"b"}, "FCFS preempts the most recently admitted"
+    victim = requests["b"]
+
+    # Freed: the victim gave back more than the step re-allocated.
+    assert scheduler.kv_cache_manager.usage < usage_before
+    # Recompute, not swap: the tokens must be produced again.
+    assert victim.num_computed_tokens == 0
+    assert victim.status is RequestStatus.PREEMPTED
+
+    # At the *front*: "c" was queued before the preemption and must not overtake it.
+    assert [request.request_id for request in scheduler.waiting] == ["b", "c"]
 
 
 def test_fcfs_preempts_the_most_recently_admitted():

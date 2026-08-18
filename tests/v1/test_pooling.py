@@ -212,8 +212,21 @@ async def test_the_embeddings_endpoint_returns_one_vector_per_input(client):
     assert all(item["object"] == "embedding" for item in body["data"])
     assert len(body["data"][0]["embedding"]) == 128
     # An embedding request generates nothing, so usage carries no completion tokens.
-    assert body["usage"]["prompt_tokens"] == body["usage"]["total_tokens"]
-    assert "completion_tokens" not in body["usage"]
+    # `prompt_tokens == total_tokens` alone is a tautology -- the response is built
+    # from one variable, so the equality survives that variable being 0, or being the
+    # length of only the first document. Bill all three, and say so.
+    usage = body["usage"]
+    assert usage["prompt_tokens"] > 0
+    assert usage["prompt_tokens"] == usage["total_tokens"]
+    assert "completion_tokens" not in usage
+
+    single = await client.post(
+        "/v1/embeddings", json={"model": MODEL, "input": ["one"]}
+    )
+    one_document = single.json()["usage"]["prompt_tokens"]
+    assert usage["prompt_tokens"] > one_document, (
+        "three documents must cost more than one -- only the first was billed"
+    )
 
 
 async def test_a_bare_string_is_one_input_not_a_batch(client):
