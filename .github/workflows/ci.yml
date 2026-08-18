@@ -57,9 +57,6 @@ jobs:
       - name: Format
         run: uv run ruff format --check .
 
-      - name: Types
-        run: uv run mypy pvllm
-
       # R21.5: the whole suite must stay under 30s on a laptop.
       - name: Test
         run: uv run pytest -q --durations=10
@@ -79,3 +76,15 @@ jobs:
         run: |
           uv run python tools/capture_golden_trace.py --check
           uv run python tools/capture_golden_trace.py --metrics
+
+      # Last, and deliberately so. `pvllm/tokenizers/hf.py` imports huggingface_hub
+      # and jinja2 from the optional `realtok` extra; without them mypy cannot resolve
+      # the module, which is why every non-Windows leg failed here while the check
+      # passed locally -- a developer's venv has the extra installed, CI's did not.
+      #
+      # `uv run --extra` installs into the shared project environment, so this step
+      # leaves realtok behind for everything after it. It therefore runs *after* the
+      # suite, so the tests keep exercising the default install -- the configuration
+      # a user actually gets -- rather than one this step quietly upgraded.
+      - name: Types
+        run: uv run --extra realtok mypy pvllm

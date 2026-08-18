@@ -64,8 +64,17 @@ def _sha256(path: Path) -> str:
 
 
 def compute_manifest() -> dict[str, str]:
+    """Path -> digest, keyed with forward slashes on every platform.
+
+    `str(Path)` renders `vllm\\benchmarks\\x.py` on Windows, so every entry read
+    from the committed manifest counted as missing and every entry computed here
+    counted as unexpected -- 2,735 of each, with 0 changed, which is the signature of
+    a key mismatch rather than a corrupted tree. `as_posix()` is the whole fix; the
+    manifest is a cross-platform artifact and has to be keyed like one.
+    """
     return {
-        str(p.relative_to(UPSTREAM_DIR)): _sha256(p) for p in _iter_vendored_files()
+        p.relative_to(UPSTREAM_DIR).as_posix(): _sha256(p)
+        for p in _iter_vendored_files()
     }
 
 
