@@ -281,3 +281,29 @@ old = '''                    stopped = self.output_processor.take_stopped_by_str
                         self.engine_core.abort_requests(stopped)'''
 new = '''                    self.output_processor.take_stopped_by_string()'''
 test = '''tests/v1/test_engine.py::test_a_stop_string_aborts_in_the_core_on_the_async_path_too'''
+
+[[mutation]]
+name = '''prompt-tokens-counter-is-populated'''
+why = '''vllm:prompt_tokens_total counts the prompt a prefill processed; unfed, it exports 0.0 forever.'''
+file = '''pvllm/v1/engine/output_processor.py'''
+old = '''                    iteration_stats.num_prompt_tokens += len(state.prompt_token_ids)'''
+new = '''                    iteration_stats.num_prompt_tokens += 0'''
+test = '''tests/entrypoints/test_openai_server.py::test_token_counters_populate_after_a_request'''
+
+[[mutation]]
+name = '''prompt-tokens-are-charged-once'''
+why = '''A prompt is charged to the step that prefilled it, not again on every decode step.'''
+file = '''pvllm/v1/engine/output_processor.py'''
+old = '''            if state.is_prefilling:
+                state.is_prefilling = False'''
+new = '''            if True:
+                state.is_prefilling = False'''
+test = '''tests/entrypoints/test_openai_server.py::test_token_counters_populate_after_a_request'''
+
+[[mutation]]
+name = '''iteration-tokens-exclude-cached-prompt-tokens'''
+why = '''vllm:iteration_tokens_total measures work done: a prefix cache hit ran no kernel and is not in it.'''
+file = '''pvllm/v1/metrics/stats.py'''
+old = '''        computed_prompt_tokens = self.num_prompt_tokens - self.num_cached_prompt_tokens'''
+new = '''        computed_prompt_tokens = self.num_prompt_tokens'''
+test = '''tests/entrypoints/test_openai_server.py::test_prefix_cache_hits_count_as_prefilled_but_not_as_computed'''
