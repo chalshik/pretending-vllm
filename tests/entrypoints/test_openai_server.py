@@ -52,6 +52,19 @@ def sse_events(text: str) -> list[dict | str]:
     return events
 
 
+def metric_value(text: str, name: str) -> float:
+    """The value of a single-series metric in a Prometheus scrape.
+
+    Matched on the name alone, labels stripped: the series carries `engine` and
+    `model_name`, and a `startswith` would also match `vllm:prompt_tokens_created`.
+    """
+    for line in text.splitlines():
+        series, _, value = line.rpartition(" ")
+        if series.split("{")[0] == name:
+            return float(value)
+    raise AssertionError(f"{name} is not in the scrape")
+
+
 # --- operational endpoints -------------------------------------------------
 
 
@@ -460,6 +473,66 @@ async def test_histogram_buckets_match_upstream_edges():
     assert REQUEST_LATENCY_BUCKETS[-1] == 7680.0
     assert TIME_TO_FIRST_TOKEN_BUCKETS[0] == 0.001
     assert TIME_TO_FIRST_TOKEN_BUCKETS[-1] == 2560.0
+
+
+async def test_token_counters_populate_after_a_request(client):
+    """C6. `vllm:prompt_tokens_total` was declared, scraped, and never incremented.
+
+    It exported 0.0 for the life of the process, so the prefill half of every
+    token-throughput panel on a dashboard built against real vLLM read empty, and
+    `vllm:iteration_tokens_total` undercounted every step by the prompt. What hid it
+    is that `vllm:request_prompt_tokens` is fed from the finished-request path and
+    was right the whole time -- the per-request panel looked healthy.
+    """
+    usage = (
+        await client.post(
+            "/v1/completions",
+            json={"model": MODEL, "prompt": "the quick brown fox", "max_tokens": 6},
+        )
+    ).json()["usage"]
+    assert usage["prompt_tokens"] > 0
+    assert usage["completion_tokens"] > 0
+
+    body = (await client.get("/metrics")).text
+    assert metric_value(body, "vllm:prompt_tokens_total") == usage["prompt_tokens"]
+    assert (
+        metric_value(body, "vllm:generation_tokens_total") == usage["completion_tokens"]
+    )
+    # A cold engine cached nothing, so every prompt token was computed and the
+    # iteration histogram sums to the whole request -- prompt included, which is the
+    # part that summed to just the 6 generated tokens before.
+    assert usage["prompt_tokens_details"]["cached_tokens"] == 0
+    assert (
+        metric_value(body, "vllm:iteration_tokens_total_sum") == usage["total_tokens"]
+    )
+    assert (
+        metric_value(body, "vllm:request_prompt_tokens_sum") == usage["prompt_tokens"]
+    )
+
+
+async def test_prefix_cache_hits_count_as_prefilled_but_not_as_computed(client):
+    """C6. Two counters, two questions, and the prefix cache separates them.
+
+    `vllm:prompt_tokens_total` counts tokens *prefilled*, cache hits included --
+    upstream accumulates the request's whole prompt length there. The iteration
+    histogram counts tokens actually *computed*, so a warm cache does not inflate the
+    apparent batch size with tokens no kernel ran on.
+    """
+    prompt = "the quick brown fox jumps over the lazy dog and keeps on running"
+    body = {"model": MODEL, "prompt": prompt, "max_tokens": 4}
+    first = (await client.post("/v1/completions", json=body)).json()["usage"]
+    second = (await client.post("/v1/completions", json=body)).json()["usage"]
+
+    cached = second["prompt_tokens_details"]["cached_tokens"]
+    assert cached > 0, "an identical second request should hit the prefix cache"
+
+    scrape = (await client.get("/metrics")).text
+    assert metric_value(scrape, "vllm:prompt_tokens_total") == (
+        first["prompt_tokens"] + second["prompt_tokens"]
+    )
+    assert metric_value(scrape, "vllm:iteration_tokens_total_sum") == (
+        first["total_tokens"] + second["total_tokens"] - cached
+    )
 
 
 # --- prefix cache ----------------------------------------------------------

@@ -45,6 +45,11 @@ class RequestState:
     arrival_time: float
     is_finished: bool = False
     num_cached_tokens: int = 0
+    #: True until the request's first output arrives. The core emits nothing for a
+    #: request until its prefill completes, so that first output is the one whose
+    #: step paid for the prompt -- which is where the prompt's token cost is
+    #: charged. Upstream carries the same flag on its own `RequestState`.
+    is_prefilling: bool = True
 
     #: R11.7. The client request this is one of `n` children of, and which of them.
     #: `None` for the overwhelming majority of requests, where `n == 1` and the
@@ -246,6 +251,25 @@ class OutputProcessor:
             if state is None:
                 # Aborted between the step being scheduled and its output arriving.
                 continue
+
+            # C6. The step that ends a prefill is charged for the whole prompt.
+            # `vllm:prompt_tokens_total` counts tokens *prefilled*, prefix cache
+            # hits included -- upstream accumulates `PrefillStats.num_prompt_tokens`,
+            # which is the request's full prompt length regardless of what the cache
+            # supplied. The cache shows up in `vllm:iteration_tokens_total` instead,
+            # which observes only the tokens a step actually computed, so the hits
+            # are recorded here rather than subtracted here.
+            #
+            # Before this, nothing incremented the counter at all: it was declared,
+            # scraped, and exported 0.0 forever, so the prefill half of every
+            # token-throughput panel read empty while the engine did the work.
+            if state.is_prefilling:
+                state.is_prefilling = False
+                if iteration_stats is not None:
+                    iteration_stats.num_prompt_tokens += len(state.prompt_token_ids)
+                    iteration_stats.num_cached_prompt_tokens += (
+                        engine_output.num_cached_tokens
+                    )
 
             # R2.2. An embedding request has no text: no detokenizer to advance, no
             # stop strings to look for, and one output rather than a stream of them.

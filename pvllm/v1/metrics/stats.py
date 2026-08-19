@@ -79,7 +79,15 @@ class FinishedRequestStats:
 class IterationStats:
     """What one engine step contributes."""
 
+    #: Prompt tokens *prefilled* this step, cached ones included. Upstream counts
+    #: the same way -- `PromptTokenStats.total` accumulates the whole prompt length,
+    #: not just the part that missed the prefix cache -- and `vllm:prompt_tokens_total`
+    #: is fed from it.
     num_prompt_tokens: int = 0
+    #: Of `num_prompt_tokens`, the ones the prefix cache supplied, so no compute
+    #: happened for them. Split out for `total_tokens`; upstream splits the same way
+    #: (`PromptTokenStats.cached_tokens` against `.computed`).
+    num_cached_prompt_tokens: int = 0
     num_generation_tokens: int = 0
     num_preempted_reqs: int = 0
     #: Seconds between an output token and the previous one, per request.
@@ -89,4 +97,12 @@ class IterationStats:
 
     @property
     def total_tokens(self) -> int:
-        return self.num_prompt_tokens + self.num_generation_tokens
+        """What `vllm:iteration_tokens_total` observes: the step's real token work.
+
+        Cached prompt tokens are excluded, because no compute happened for them --
+        upstream observes `prompt_token_stats.computed + num_generation_tokens`.
+        Counting a prefix cache hit here would report a batch the step never ran,
+        and the histogram exists to show how full the batches actually are.
+        """
+        computed_prompt_tokens = self.num_prompt_tokens - self.num_cached_prompt_tokens
+        return computed_prompt_tokens + self.num_generation_tokens
