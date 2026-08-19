@@ -62,10 +62,10 @@ Two sockets, one child process, three frame tags in each direction.
 
 ```python
 class EngineCoreRequestType(enum.Enum):
-    ADD     = b"\x00"
-    ABORT   = b"\x01"
+    ADD = b"\x00"
+    ABORT = b"\x01"
     UTILITY = b"\x02"
-    WAKEUP  = b"\x03"      # in-process sentinel, wakes a blocked input queue
+    WAKEUP = b"\x03"  # in-process sentinel, wakes a blocked input queue
 ```
 
 Hex byte strings so the tag needs no encoding step of its own, matching upstream.
@@ -78,6 +78,7 @@ class UtilityCall(msgspec.Struct, array_like=True, gc=False):
     call_id: int
     method: str
     args: list[Any] = []
+
 
 class UtilityReply(msgspec.Struct, array_like=True, gc=False):
     call_id: int
@@ -96,12 +97,18 @@ than a plausible-looking exception with the wrong traceback attached."
 ### The core process
 
 ```python
-self.input_socket  = self.ctx.socket(zmq.PULL); self.input_socket.connect(input_address)
-self.output_socket = self.ctx.socket(zmq.PUSH); self.output_socket.connect(output_address)
+self.input_socket = self.ctx.socket(zmq.PULL)
+self.input_socket.connect(input_address)
+self.output_socket = self.ctx.socket(zmq.PUSH)
+self.output_socket.connect(output_address)
 
 self._threads = [
-    threading.Thread(target=self._read_input_socket,  name="pvllm-core-input",  daemon=True),
-    threading.Thread(target=self._write_output_socket, name="pvllm-core-output", daemon=True),
+    threading.Thread(
+        target=self._read_input_socket, name="pvllm-core-input", daemon=True
+    ),
+    threading.Thread(
+        target=self._write_output_socket, name="pvllm-core-output", daemon=True
+    ),
 ]
 ```
 

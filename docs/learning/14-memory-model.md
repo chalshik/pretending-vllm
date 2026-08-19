@@ -33,10 +33,14 @@ Every term except `activation_peak` is arithmetic on declared quantities, and is
 ```python
 def compute_weight_bytes(model, dtype, tp_size=1, ep_size=None) -> int:
     embedding = model.embedding_parameters
-    experts   = model.num_hidden_layers * model.expert_parameters_per_layer
-    dense     = model.num_parameters - embedding - experts
+    experts = model.num_hidden_layers * model.expert_parameters_per_layer
+    dense = model.num_parameters - embedding - experts
     ...
-    return embedding * dtype_bytes + (dense * dtype_bytes) // tp_size + local_experts * dtype_bytes
+    return (
+        embedding * dtype_bytes
+        + (dense * dtype_bytes) // tp_size
+        + local_experts * dtype_bytes
+    )
 ```
 
 Two subtleties that the obvious version gets wrong:
@@ -79,7 +83,7 @@ ACTIVATION_INTERMEDIATE_MULTIPLIER = 2
 
 per_token = (hidden * 6 + intermediate_local * 2) * dtype_bytes
 activations = max_num_batched_tokens * per_token
-logits = max_num_seqs * vocab_size * 4          # fp32 regardless of model dtype
+logits = max_num_seqs * vocab_size * 4  # fp32 regardless of model dtype
 ```
 
 Upstream **measures** this: `determine_available_memory` runs a real profiling forward pass at
@@ -104,7 +108,7 @@ model.
 ### Non-torch overhead
 
 ```python
-DEFAULT_NON_TORCH_OVERHEAD_BYTES = 1 << 30   # 1 GiB
+DEFAULT_NON_TORCH_OVERHEAD_BYTES = 1 << 30  # 1 GiB
 ```
 
 Allocator fragmentation, CUDA context, NCCL buffers — everything real vLLM finds already
@@ -270,17 +274,17 @@ pvllm serve --model dense-8b --clock-mode real --cost-model-profile roofline
 ```python
 @dataclass
 class DeviceCard:
-    memory_bytes: int              # exact, feeds this whole chapter
-    memory_bandwidth: float        # the memory term of the roofline
-    peak_flops: dict[str, float]   # DENSE peaks, not sparsity-doubled
+    memory_bytes: int  # exact, feeds this whole chapter
+    memory_bandwidth: float  # the memory term of the roofline
+    peak_flops: dict[str, float]  # DENSE peaks, not sparsity-doubled
     interconnect_bandwidth: float  # the tensor-parallel allreduce term
     launch_overhead: float
-    load_bandwidth: float          # weights "read from disk" at startup
+    load_bandwidth: float  # weights "read from disk" at startup
     num_devices: int = 1
-    mfu: float = 0.45              # ┐
-    bw_eff: float = 0.80           # ├ achievable fractions of peak — the calibration knobs
-    link_eff: float = 0.75         # ┘
-    provenance: str                # where these came from, and how much to trust them
+    mfu: float = 0.45  # ┐
+    bw_eff: float = 0.80  # ├ achievable fractions of peak — the calibration knobs
+    link_eff: float = 0.75  # ┘
+    provenance: str  # where these came from, and how much to trust them
 ```
 
 Only the first field is used by *this* chapter; the rest belong to chapter

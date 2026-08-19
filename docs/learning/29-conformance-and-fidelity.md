@@ -62,15 +62,15 @@ This is the design decision that makes the suite worth having:
 @dataclass
 class ConformanceRecord:
     workload: str
-    source: str                  # pretending-vllm | vllm
+    source: str  # pretending-vllm | vllm
     upstream_version: str
-    config: dict[str, Any]       # completely pinned
-    steps: list[dict]            # C1
-    block_allocations: list[list[int]]   # C2
-    block_frees: list[list[int]]         # C2
-    prefix_cache: dict           # C3
-    block_hashes: list[str]      # C3
-    preemptions: dict            # C4
+    config: dict[str, Any]  # completely pinned
+    steps: list[dict]  # C1
+    block_allocations: list[list[int]]  # C2
+    block_frees: list[list[int]]  # C2
+    prefix_cache: dict  # C3
+    block_hashes: list[str]  # C3
+    preemptions: dict  # C4
     outputs: dict[str, list[int]]
 ```
 

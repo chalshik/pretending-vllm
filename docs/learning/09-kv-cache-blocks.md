@@ -44,12 +44,12 @@ flowchart LR
 ```python
 @dataclass
 class KVCacheBlock:
-    block_id: int                                 # 0 .. num_gpu_blocks-1
-    ref_cnt: int = 0                              # how many requests hold it
+    block_id: int  # 0 .. num_gpu_blocks-1
+    ref_cnt: int = 0  # how many requests hold it
     _block_hash: BlockHashWithGroupId | None = None  # set when full and cached
-    prev_free_block: KVCacheBlock | None = None   # ← the free-list links live here
+    prev_free_block: KVCacheBlock | None = None  # ← the free-list links live here
     next_free_block: KVCacheBlock | None = None
-    is_null: bool = False                         # the shared placeholder
+    is_null: bool = False  # the shared placeholder
 ```
 
 `ref_cnt == 0` means the block is in the free queue and may be evicted. Non-zero means at
@@ -83,7 +83,7 @@ Five operations, and their positions are all meaningful:
 
 ### `BlockPool` — ownership and eviction
 
-```python
+```
 def get_new_blocks(self, num_blocks) -> list[KVCacheBlock]:   # pop from the front
 def touch(self, blocks) -> None:                              # re-reference a cached block
 def free_blocks(self, ordered_blocks) -> None:                # drop a reference
@@ -110,8 +110,8 @@ hit rate collapses — a bug that looks like a tuning problem rather than a corr
 ### 2. Unhashed blocks are prepended, hashed blocks appended
 
 ```python
-self.free_block_queue.prepend_n(blocks_without_hash)   # spend these first
-self.free_block_queue.append_n(blocks_with_hash)       # keep these as long as possible
+self.free_block_queue.prepend_n(blocks_without_hash)  # spend these first
+self.free_block_queue.append_n(blocks_with_hash)  # keep these as long as possible
 ```
 
 A block with no hash — a partial tail block, for instance — can never produce a cache hit,
@@ -146,7 +146,7 @@ handed straight back out. Blocks 3–7, never allocated, sit behind them.
 The scheduler never sees a `KVCacheBlock`. It sees block **ids**, wrapped in
 `KVCacheBlocks`:
 
-```python
+```
 @dataclass
 class KVCacheBlocks:
     blocks: tuple[list[KVCacheBlock], ...]     # blocks[group][index]
@@ -159,7 +159,7 @@ the runner — chapter [11](11-hybrid-kv-groups.md).
 
 Four methods, and `allocate_slots` is the one to know:
 
-```python
+```
 def get_computed_blocks(self, request) -> tuple[KVCacheBlocks, int]   # chapter 10
 def allocate_slots(self, request, num_new_tokens, ...) -> KVCacheBlocks | None
 def remove_skipped_blocks(self, request) -> None                     # chapter 11
@@ -203,38 +203,59 @@ a block that can never be written.
 ## Try it: watch two requests share
 
 ```python
-from pvllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec
+from pvllm.v1.kv_cache_interface import (
+    FullAttentionSpec,
+    KVCacheConfig,
+    KVCacheGroupSpec,
+)
 from pvllm.v1.core.kv_cache_manager import KVCacheManager
 from pvllm.v1.request import Request
 from pvllm.sampling_params import SamplingParams
 
-spec = FullAttentionSpec(block_size=16, num_kv_heads=8, head_size=128,
-                         dtype="bfloat16", dtype_bytes=2)
-cfg = KVCacheConfig(num_blocks=20,
-                    kv_cache_groups=[KVCacheGroupSpec(layer_names=["l0"], kv_cache_spec=spec)])
+spec = FullAttentionSpec(
+    block_size=16, num_kv_heads=8, head_size=128, dtype="bfloat16", dtype_bytes=2
+)
+cfg = KVCacheConfig(
+    num_blocks=20,
+    kv_cache_groups=[KVCacheGroupSpec(layer_names=["l0"], kv_cache_spec=spec)],
+)
 m = KVCacheManager(cfg, max_model_len=1024, enable_caching=True)
 
+
 def make(rid, toks):
-    return Request(request_id=rid, prompt_token_ids=toks,
-                   sampling_params=SamplingParams(max_tokens=4),
-                   arrival_time=0.0, block_hasher=m.block_hasher)
+    return Request(
+        request_id=rid,
+        prompt_token_ids=toks,
+        sampling_params=SamplingParams(max_tokens=4),
+        arrival_time=0.0,
+        block_hasher=m.block_hasher,
+    )
 
-shared = list(range(1000, 1048))                 # 48 tokens = exactly 3 blocks
 
-r1 = make("r1", shared + [7, 7, 7, 7])           # 52 tokens
+shared = list(range(1000, 1048))  # 48 tokens = exactly 3 blocks
+
+r1 = make("r1", shared + [7, 7, 7, 7])  # 52 tokens
 blocks, hit = m.get_computed_blocks(r1)
 print("r1 hit:", hit)
-print("r1 blocks:", m.allocate_slots(r1, r1.num_tokens,
-                                     num_new_computed_tokens=hit,
-                                     new_computed_blocks=blocks).get_block_ids())
+print(
+    "r1 blocks:",
+    m.allocate_slots(
+        r1, r1.num_tokens, num_new_computed_tokens=hit, new_computed_blocks=blocks
+    ).get_block_ids(),
+)
 
-r2 = make("r2", shared + [9, 9, 9, 9])           # same prefix, different tail
+r2 = make("r2", shared + [9, 9, 9, 9])  # same prefix, different tail
 blocks2, hit2 = m.get_computed_blocks(r2)
 print("r2 hit:", hit2, "reusing", [b.block_id for b in blocks2.blocks[0]])
-print("r2 new blocks:",
-      m.allocate_slots(r2, r2.num_tokens - hit2,
-                       num_new_computed_tokens=hit2,
-                       new_computed_blocks=blocks2).get_block_ids())
+print(
+    "r2 new blocks:",
+    m.allocate_slots(
+        r2,
+        r2.num_tokens - hit2,
+        num_new_computed_tokens=hit2,
+        new_computed_blocks=blocks2,
+    ).get_block_ids(),
+)
 print("pool free:", m.block_pool.get_num_free_blocks())
 print(m.make_prefix_cache_stats().as_dict())
 ```
@@ -258,10 +279,10 @@ four tokens instead of 52.
 test suite does:
 
 ```python
-assert num_free == self.free_block_queue.num_free_blocks        # counter matches the list
-assert num_free + allocated == self.num_gpu_blocks              # nothing lost
+assert num_free == self.free_block_queue.num_free_blocks  # counter matches the list
+assert num_free + allocated == self.num_gpu_blocks  # nothing lost
 for block in free_blocks:
-    assert block.ref_cnt == 0                                   # free ⇒ unreferenced
+    assert block.ref_cnt == 0  # free ⇒ unreferenced
 assert 0.0 <= self.get_usage() <= 1.0
 ```
 

@@ -12,8 +12,8 @@ in a loop, and the two ways a program drives it.
 ```python
 class EngineCore:
     def __init__(self, vllm_config, executor_class=None, log_stats=True, trace=None):
-        self.clock = current_platform.build_clock(...)      # ← owns the clock
-        self.trace = trace or self._open_trace()            # ← owns the trace
+        self.clock = current_platform.build_clock(...)  # ← owns the clock
+        self.trace = trace or self._open_trace()  # ← owns the trace
         self.executor = executor_class(vllm_config, self.clock)
         kv_cache_config = self._initialize_kv_caches()
         self.scheduler = Scheduler(vllm_config, kv_cache_config, trace=self.trace)
@@ -30,9 +30,10 @@ never learns that its timebase is simulated — the same reason it does not impo
 This is where the memory model meets the KV cache layout, and it runs in upstream's order:
 
 ```python
-available = self.executor.determine_available_memory()[0]   # runs a profiling step + memory model
-specs     = self.executor.get_kv_cache_specs()[0]           # per-layer specs
-groups    = get_kv_cache_groups(specs)                      # partition into groups
+# a profiling step, then the memory model
+available = self.executor.determine_available_memory()[0]
+specs = self.executor.get_kv_cache_specs()[0]  # per-layer specs
+groups = get_kv_cache_groups(specs)  # partition into groups
 layers_per_group = max(len(g.layer_names) for g in groups)
 page_size = groups[0].kv_cache_spec.page_size_bytes * layers_per_group
 num_blocks = available // page_size
@@ -51,10 +52,10 @@ and the two forms coincide.
 
 ```python
 def step(self):
-    planned = self._plan_step()                # schedule + stamp SCHEDULED + grammar bitmask
+    planned = self._plan_step()  # schedule + stamp SCHEDULED + grammar bitmask
     if planned is None:
         return {}, False
-    self._transfer_kv(planned)                 # pull external KV, charge the clock
+    self._transfer_kv(planned)  # pull external KV, charge the clock
     return self._finish_step(planned, self.executor.execute_model(planned))
 ```
 
@@ -85,14 +86,16 @@ failure delivered nowhere is a request that hangs.
 
 ```python
 def add_request(self, request: EngineCoreRequest) -> None:
-    arrival_time = self.clock.time()                        # ← stamped here, R19.1
+    arrival_time = self.clock.time()  # ← stamped here, R19.1
     req = Request.from_engine_core_request(request, arrival_time=arrival_time)
     if self.log_stats:
         req.record_event(EngineCoreEventType.QUEUED, arrival_time)
     if req.use_structured_output:
-        self.structured_output_manager.grammar_init(req)    # compile *while* it queues
+        self.structured_output_manager.grammar_init(req)  # compile *while* it queues
     self.scheduler.add_request(req)
-    self.trace.emit("request", t=arrival_time, request_id=..., event="arrived", ...)
+    self.trace.emit(
+        "request", t=arrival_time, request_id=req.request_id, event="arrived"
+    )
 ```
 
 `abort_requests` traces only ids the core actually holds: "a trace claiming an abort that did not
@@ -100,7 +103,7 @@ happen is worse than one that is silent, because it is read as evidence."
 
 ## `EngineCoreClient` — how the frontend reaches the core
 
-```python
+```
 class EngineCoreClient(ABC):
     def add_request(self, request) -> None
     def abort_requests(self, request_ids) -> None
@@ -126,7 +129,7 @@ spawn.
 
 ## `InputProcessor` — the way in
 
-```python
+```
 def process_inputs(self, request_id, prompt, sampling_params=None, *, client_index=0, ...)
     -> EngineCoreRequest
 ```
@@ -202,11 +205,11 @@ prompt *before* the first step, so batch composition is fixed by the workload al
 ```python
 from pvllm.entrypoints.llm import LLM
 
-llm = LLM(model="dense-0.6b", max_model_len=2048)   # any EngineArgs field as a kwarg
-llm.generate(prompts, sampling_params)              # -> list[RequestOutput]
-llm.chat(messages, sampling_params)                 # applies a chat template
-llm.embed(prompts)                                  # -> list[PoolingRequestOutput]
-llm.shutdown()                                      # or use it as a context manager
+llm = LLM(model="dense-0.6b", max_model_len=2048)  # any EngineArgs field as a kwarg
+llm.generate(prompts, sampling_params)  # -> list[RequestOutput]
+llm.chat(messages, sampling_params)  # applies a chat template
+llm.embed(prompts)  # -> list[PoolingRequestOutput]
+llm.shutdown()  # or use it as a context manager
 ```
 
 One of the two compatibility surfaces the project promises (the other is HTTP). Note the import
@@ -232,14 +235,14 @@ async def _run_output_handler(self):
                 return
             continue
         now = self.engine_core.clock_time
-        engine_core_outputs = await self.engine_core.get_output_async()   # ← awaited
+        engine_core_outputs = await self.engine_core.get_output_async()  # ← awaited
         for client_outputs in engine_core_outputs.values():
             for output in self.output_processor.process_outputs(...):
                 self._queues[output.request_id].put_nowait(output)
             stopped = self.output_processor.take_stopped_by_string()
             if stopped:
                 self.engine_core.abort_requests(stopped)
-        await asyncio.sleep(0)     # let the loop turn, so streaming actually streams
+        await asyncio.sleep(0)  # let the loop turn, so streaming actually streams
 ```
 
 One loop, not one per request: a step produces output for the whole batch at once, and the
@@ -253,7 +256,7 @@ routed there.
 
 **Cancellation — the load-bearing behaviour.**
 
-```python
+```
 finally:
     # Runs on normal completion *and* on cancellation.
     self._queues.pop(request_id, None)
@@ -298,7 +301,9 @@ while engine.has_unfinished_requests():
     step += 1
     for out in engine.step():
         tag = "finished" if out.finished else "partial "
-        print(f"step {step}: {out.request_id} {tag} ({len(out.outputs[0].token_ids)} tokens)")
+        print(
+            f"step {step}: {out.request_id} {tag} ({len(out.outputs[0].token_ids)} tokens)"
+        )
 print("total steps:", step)
 engine.shutdown()
 ```
@@ -330,17 +335,21 @@ from pvllm.engine.arg_utils import AsyncEngineArgs
 from pvllm.v1.engine.async_llm import AsyncLLM
 from pvllm.sampling_params import SamplingParams
 
+
 async def main():
-    engine = AsyncLLM.from_engine_args(AsyncEngineArgs(model="dense-0.6b", max_model_len=512))
+    engine = AsyncLLM.from_engine_args(
+        AsyncEngineArgs(model="dense-0.6b", max_model_len=512)
+    )
     gen = engine.generate("hello", SamplingParams(max_tokens=50), request_id="r1")
     async for out in gen:
         n = len(out.outputs[0].token_ids)
         if n >= 5:
-            break                      # walk away after five of fifty tokens
-    await gen.aclose()                 # what a disconnect does: runs the `finally`
+            break  # walk away after five of fifty tokens
+    await gen.aclose()  # what a disconnect does: runs the `finally`
     await asyncio.sleep(0)
     print("tokens received:", n)
     print("engine still tracking:", engine.output_processor.num_requests)
+
 
 asyncio.run(main())
 ```

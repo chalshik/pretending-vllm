@@ -22,11 +22,14 @@ Everything interesting is in the details of that paragraph.
 ## Detail 1: the hash chains
 
 ```python
-def hash_block_tokens(hash_fn, parent_block_hash, curr_block_token_ids,
-                      none_hash, extra_keys=None) -> BlockHash:
+def hash_block_tokens(
+    hash_fn, parent_block_hash, curr_block_token_ids, none_hash, extra_keys=None
+) -> BlockHash:
     if not parent_block_hash:
         parent_block_hash = none_hash
-    return BlockHash(hash_fn((parent_block_hash, tuple(curr_block_token_ids), extra_keys)))
+    return BlockHash(
+        hash_fn((parent_block_hash, tuple(curr_block_token_ids), extra_keys))
+    )
 ```
 
 **The chain through `parent_block_hash` is what makes this a *prefix* cache rather than a
@@ -50,7 +53,7 @@ for block_hash in block_hashes[: max_length // block_size]:
 
 ## Detail 2: only *full* blocks are hashed
 
-```python
+```
 def request_block_hasher(request):
     start = len(request.block_hashes) * block_size
     ...
@@ -79,11 +82,11 @@ differs:
 def generate_block_hash_extra_keys(request, start_token_idx=0, end_token_idx=None):
     keys = []
     if request.lora_request is not None:
-        keys.append(request.lora_request.lora_name)     # different adapter ⇒ different KV
+        keys.append(request.lora_request.lora_name)  # different adapter ⇒ different KV
     if request.mm_features:
-        keys.extend((f.identifier, f.position - start_token_idx) for f in ... )
+        keys.extend((f.identifier, f.position - start_token_idx) for f in ...)
     if start_token_idx == 0 and request.cache_salt:
-        keys.append(request.cache_salt)                 # tenant partitioning
+        keys.append(request.cache_salt)  # tenant partitioning
     return tuple(keys) if keys else None
 ```
 
@@ -194,12 +197,15 @@ in your own tests.
 from pvllm.entrypoints.llm import LLM
 from pvllm.sampling_params import SamplingParams
 
-system = "You are a helpful assistant. " * 20        # 581 tokens under the mock tokenizer
+system = "You are a helpful assistant. " * 20  # 581 tokens under the mock tokenizer
 llm = LLM(model="dense-0.6b", max_model_len=2048)
 
-for out in llm.generate([system + "What is one?", system + "What is two?"],
-                        SamplingParams(max_tokens=4)):
-    print("prompt_tokens =", len(out.prompt_token_ids), " cached =", out.num_cached_tokens)
+for out in llm.generate(
+    [system + "What is one?", system + "What is two?"], SamplingParams(max_tokens=4)
+):
+    print(
+        "prompt_tokens =", len(out.prompt_token_ids), " cached =", out.num_cached_tokens
+    )
 ```
 
 ```

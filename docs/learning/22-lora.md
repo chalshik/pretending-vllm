@@ -12,10 +12,12 @@ weights.
 ## 1. An admission constraint
 
 ```python
-if (self.lora_config is not None
-        and request.lora_request is not None
-        and len(scheduled_loras) >= self.lora_config.max_loras
-        and request.lora_request.lora_int_id not in scheduled_loras):
+if (
+    self.lora_config is not None
+    and request.lora_request is not None
+    and len(scheduled_loras) >= self.lora_config.max_loras
+    and request.lora_request.lora_int_id not in scheduled_loras
+):
     self.waiting.pop_request()
     self.skipped_waiting.add_request(request)
     continue
@@ -169,8 +171,13 @@ from pvllm.entrypoints.llm import LLM
 from pvllm.sampling_params import SamplingParams
 from pvllm.lora.request import LoRARequest
 
-llm = LLM(model="dense-0.6b", max_model_len=1024, enable_lora=True, max_loras=1,
-          trace_path="lora.jsonl")
+llm = LLM(
+    model="dense-0.6b",
+    max_model_len=1024,
+    enable_lora=True,
+    max_loras=1,
+    trace_path="lora.jsonl",
+)
 # four requests, four different adapters, one slot
 for i in range(4):
     ...  # submit via llm_engine.add_request with lora_request=LoRARequest(...)

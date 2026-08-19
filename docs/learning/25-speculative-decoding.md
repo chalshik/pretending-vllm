@@ -84,7 +84,7 @@ def accepted_draft_count(self, request_id: str, num_drafts: int) -> int:
     accepted = 0
     for _ in range(num_drafts):
         if float(rng.random()) >= self.spec_acceptance_rate:
-            break                      # ← stop at the FIRST rejection
+            break  # ← stop at the FIRST rejection
         accepted += 1
     return accepted
 ```
@@ -115,8 +115,10 @@ verification work in every step. That is the shape you should be able to predict
 ## Disabling by batch size
 
 ```python
-if (self.spec_disable_by_batch_size is not None
-        and len(self.running) > self.spec_disable_by_batch_size):
+if (
+    self.spec_disable_by_batch_size is not None
+    and len(self.running) > self.spec_disable_by_batch_size
+):
     request.spec_token_ids = []
 ```
 
@@ -152,7 +154,14 @@ pvllm bench sweep --model dense-8b --device-card datacenter-80gb \
 ## Proposal methods
 
 ```python
-SPECULATIVE_METHODS = ("ngram", "eagle", "eagle3", "medusa", "mlp_speculator", "draft_model")
+SPECULATIVE_METHODS = (
+    "ngram",
+    "eagle",
+    "eagle3",
+    "medusa",
+    "mlp_speculator",
+    "draft_model",
+)
 ```
 
 Each needs a real draft model or a real n-gram index over real text, so **none of them is executed**

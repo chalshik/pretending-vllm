@@ -57,7 +57,7 @@ using the same door a real hardware vendor would.
 
 The platform also answers the questions upstream answers by probing hardware:
 
-```python
+```
 SimPlatform.get_device_name()          # from the device card's JSON
 SimPlatform.get_device_total_memory()  # from the device card's JSON
 SimPlatform.get_device_count()         # from the device card's JSON
@@ -69,7 +69,7 @@ answerable without owning eight cards.
 Two more things cross through the platform rather than being imported directly, for the
 same reason:
 
-```python
+```
 current_platform.build_clock(mode, time_scale=...)   # so EngineCore never imports sim
 current_platform.build_trace_sink(path, ...)
 current_platform.build_kv_connector(config, role)
@@ -116,10 +116,17 @@ constantly — do not trip it.
 What it checks:
 
 ```python
-FORBIDDEN_TIME_ATTRS = {"time", "monotonic", "perf_counter", "process_time",
-                        "time_ns", "now", "utcnow"}
-FORBIDDEN_MODULES    = {"torch", "transformers", "cupy", "triton"}
-RANDOM_MODULES       = {"random", "secrets"}
+FORBIDDEN_TIME_ATTRS = {
+    "time",
+    "monotonic",
+    "perf_counter",
+    "process_time",
+    "time_ns",
+    "now",
+    "utcnow",
+}
+FORBIDDEN_MODULES = {"torch", "transformers", "cupy", "triton"}
+RANDOM_MODULES = {"random", "secrets"}
 BOUNDARY_ENFORCED_SUBTREES = ("v1/core", "v1/engine", "entrypoints")
 ```
 
@@ -168,7 +175,7 @@ Where the tiers land, roughly:
 
 A module with no upstream counterpart declares one of two things:
 
-```python
+```
 Upstream: (none -- simulator)        # Tier D
 Upstream: (none -- pvllm addition)   # any tier: an interface above the boundary
 ```
@@ -189,12 +196,14 @@ Examples you will meet:
 ```python
 # pvllm/v1/executor/abstract.py
 raise NotImplementedError(
-    f"distributed_executor_backend={backend!r} is not implemented. ...")
+    f"distributed_executor_backend={backend!r} is not implemented. ..."
+)
 
 # pvllm/v1/core/block_pool.py
 raise NotImplementedError(
     "KV cache event publishing (R12.5, --kv-events-config) is not modelled ... "
-    "so enabling it would report a stream that never arrives.")
+    "so enabling it would report a stream that never arrives."
+)
 ```
 
 For a test double, failing loudly beats behaving subtly wrongly. A flag that is accepted

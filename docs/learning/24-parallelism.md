@@ -125,7 +125,9 @@ DP on."
 ```python
 score = max(self.engine_inflight[index], waiting + running)
 if usage > 0.5:
-    score += waiting * 6.0 * max(0.0, usage - 0.5)     # penalise queueing on a pressured pool
+    score += (
+        waiting * 6.0 * max(0.0, usage - 0.5)
+    )  # penalise queueing on a pressured pool
 ```
 
 The greater of this client's exact in-flight count and the replica's own `waiting + running`, plus a
@@ -259,10 +261,15 @@ Expert parallelism has no CLI flag, so its side of the comparison goes through t
 from pvllm.entrypoints.llm import LLM
 from pvllm.sampling_params import SamplingParams
 
-llm = LLM(model="moe-8x7b", max_model_len=4096, data_parallel_size=8,
-          enable_expert_parallel=True, cost_model_profile="roofline")
+llm = LLM(
+    model="moe-8x7b",
+    max_model_len=4096,
+    data_parallel_size=8,
+    enable_expert_parallel=True,
+    cost_model_profile="roofline",
+)
 llm.generate(["a prompt"], SamplingParams(max_tokens=16))
-print(llm.llm_engine.make_stats())      # includes the dummy-step counters
+print(llm.llm_engine.make_stats())  # includes the dummy-step counters
 ```
 
 ```

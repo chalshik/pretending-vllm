@@ -12,11 +12,11 @@ chapter, and both are the kind of property you cannot retrofit.
 
 ```python
 class Clock(ABC):
-    def time(self) -> float:              # modeled timeline, as a Unix timestamp
+    def time(self) -> float:  # modeled timeline, as a Unix timestamp
         return self._epoch + self._elapsed
 
     def advance(self, duration: float) -> float:
-        self._sleep(duration)             # ← the only thing that differs between modes
+        self._sleep(duration)  # ← the only thing that differs between modes
         self._elapsed += duration
         return self.time()
 ```
@@ -67,7 +67,7 @@ s of modeled time: that 60 ms is the simulator.
 ## The fixed epoch
 
 ```python
-DEFAULT_EPOCH = 1767225600.0    # 2026-01-01T00:00:00Z
+DEFAULT_EPOCH = 1767225600.0  # 2026-01-01T00:00:00Z
 ```
 
 Fixed so a run is reproducible **down to its timestamps**; plausible so timestamps that reach an
@@ -194,14 +194,16 @@ Reproducibility, and the one thing that is *not* the seed's job:
 from pvllm.entrypoints.llm import LLM
 from pvllm.sampling_params import SamplingParams
 
+
 def run(seed):
     llm = LLM(model="dense-0.6b", max_model_len=512, seed=seed)
     out = llm.generate(["hello"], SamplingParams(max_tokens=8))[0]
     llm.shutdown()
     return out.outputs[0].text
 
-print(run(0) == run(0))     # True  — same seed, same run
-print(run(0) == run(1))     # False — different seed, different draw
+
+print(run(0) == run(0))  # True  — same seed, same run
+print(run(0) == run(1))  # False — different seed, different draw
 ```
 
 And a per-request seed, which survives being run alongside anything else:
@@ -209,8 +211,8 @@ And a per-request seed, which survives being run alongside anything else:
 ```python
 llm = LLM(model="dense-0.6b", max_model_len=512)
 a = llm.generate(["x"], SamplingParams(max_tokens=6, seed=99))[0].outputs[0].text
-b = llm.generate(["x", "y", "z"], SamplingParams(max_tokens=6, seed=99))[0].outputs[0].text
-print(a == b)               # True
+batched = llm.generate(["x", "y", "z"], SamplingParams(max_tokens=6, seed=99))
+print(a == batched[0].outputs[0].text)  # True
 ```
 
 ## Check yourself

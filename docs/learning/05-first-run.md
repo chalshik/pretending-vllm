@@ -172,6 +172,7 @@ And with the real OpenAI Python client:
 
 ```python
 from openai import OpenAI
+
 client = OpenAI(base_url="http://localhost:8000/v1", api_key="unused")
 for chunk in client.chat.completions.create(
     model="dense-0.6b",

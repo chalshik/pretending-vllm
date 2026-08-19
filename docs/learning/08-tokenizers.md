@@ -180,7 +180,8 @@ from pvllm.sampling_params import SamplingParams
 
 llm = LLM(model="dense-0.6b", max_model_len=1024)
 out = llm.generate(["x"], SamplingParams(max_tokens=20, stop=["zzz"]))[0]
-print(repr(out.outputs[0].text), out.outputs[0].finish_reason, out.outputs[0].stop_reason)
+completion = out.outputs[0]
+print(repr(completion.text), completion.finish_reason, completion.stop_reason)
 ```
 
 And compare token counts across tokenizer modes, if you have the extra installed:

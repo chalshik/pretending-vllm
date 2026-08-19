@@ -30,7 +30,7 @@ FAKE                     SimModelRunner → SimDevice (memory ledger + cost mode
 
 Exactly one function crosses that line, and it is the same one upstream uses:
 
-```python
+```
 SimModelRunner.execute_model(scheduler_output: SchedulerOutput) -> ModelRunnerOutput
 ```
 

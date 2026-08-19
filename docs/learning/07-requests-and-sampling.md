@@ -29,18 +29,18 @@ because a client sending an out-of-range `top_p` must get the same error here as
 vLLM.
 
 ```python
-n: int = 1                      # → fanned out in the frontend, see below
+n: int = 1  # → fanned out in the frontend, see below
 temperature: float = 1.0
 top_p: float = 1.0
 top_k: int = 0
 min_p: float = 0.0
-seed: int | None = None         # honoured: same seed → same completion
-stop: str | list[str] | None    # stop *strings* → output processor
+seed: int | None = None  # honoured: same seed → same completion
+stop: str | list[str] | None  # stop *strings* → output processor
 stop_token_ids: list[int] | None
 ignore_eos: bool = False
 max_tokens: int | None = 16
 min_tokens: int = 0
-logprobs: int | None = None     # shape is real, values are synthetic
+logprobs: int | None = None  # shape is real, values are synthetic
 detokenize: bool = True
 output_kind: RequestOutputKind  # CUMULATIVE | DELTA | FINAL_ONLY
 structured_outputs: StructuredOutputsParams | None
@@ -68,18 +68,18 @@ one result at the end.
 ```python
 request_id: str
 prompt_token_ids: list[int]
-sampling_params: SamplingParams | None      # exactly one of these two
-pooling_params: PoolingParams | None        # ← chapter 27
-arrival_time: float                         # stamped by the engine core
+sampling_params: SamplingParams | None  # exactly one of these two
+pooling_params: PoolingParams | None  # ← chapter 27
+arrival_time: float  # stamped by the engine core
 status: RequestStatus
-num_computed_tokens: int                    # ← the whole scheduling model
-spec_token_ids: list[int]                   # ← chapter 25
-block_hashes: list[BlockHash]               # ← chapter 10
+num_computed_tokens: int  # ← the whole scheduling model
+spec_token_ids: list[int]  # ← chapter 25
+block_hashes: list[BlockHash]  # ← chapter 10
 num_cached_tokens: int
 num_preemptions: int
 is_prefill_chunk: bool
-mm_features: list[...]                      # ← chapter 23
-structured_output_request: ... | None       # ← chapter 21
+mm_features: list[...]  # ← chapter 23
+structured_output_request: ... | None  # ← chapter 21
 events: list[EngineCoreEvent]
 ```
 
@@ -87,8 +87,9 @@ The counters that replace the prefill/decode distinction:
 
 ```python
 @property
-def num_tokens(self) -> int:          # prompt + everything generated
+def num_tokens(self) -> int:  # prompt + everything generated
     return len(self._all_token_ids)
+
 
 @property
 def num_tokens_with_spec(self) -> int:  # ...plus drafts awaiting verification
@@ -137,7 +138,9 @@ length cap is *ignored*, and the OpenAI API reports that as `"length"`.
 ### Load-bearing detail 2: block hashing is injected
 
 ```python
-def attach_block_hasher(self, block_hasher: Callable[[Request], list[BlockHash]]) -> None:
+def attach_block_hasher(
+    self, block_hasher: Callable[[Request], list[BlockHash]]
+) -> None:
     self._block_hasher = block_hasher
     self.update_block_hashes()
 ```
@@ -170,7 +173,7 @@ class EngineCoreRequest(msgspec.Struct, array_like=True, omit_defaults=True, gc=
     request_id: str
     prompt_token_ids: list[int] | None
     sampling_params: SamplingParams | None
-    arrival_time: float | None = None      # None from the frontend is normal
+    arrival_time: float | None = None  # None from the frontend is normal
     client_index: int = 0
     lora_request: Any = None
     cache_salt: str | None = None
@@ -212,11 +215,13 @@ def check_stop(request, max_model_len) -> bool:
 
     if last_token_id in (sampling_params.stop_token_ids or ()):
         request.status = RequestStatus.FINISHED_STOPPED
-        request.stop_reason = last_token_id      # the API reports which token
+        request.stop_reason = last_token_id  # the API reports which token
         return True
 
-    if (request.num_tokens >= max_model_len
-            or request.num_output_tokens >= request.max_tokens):
+    if (
+        request.num_tokens >= max_model_len
+        or request.num_output_tokens >= request.max_tokens
+    ):
         request.status = RequestStatus.FINISHED_LENGTH_CAPPED
         return True
 
@@ -273,14 +278,15 @@ class CompletionOutput:
     finish_reason: str | None = None
     stop_reason: int | str | None = None
 
+
 @dataclass
 class RequestOutput:
     request_id: str
     prompt: str | None
     prompt_token_ids: list[int] | None
-    outputs: list[CompletionOutput]        # length n
+    outputs: list[CompletionOutput]  # length n
     finished: bool
-    num_cached_tokens: int = 0             # ← how much the prefix cache saved
+    num_cached_tokens: int = 0  # ← how much the prefix cache saved
     kv_transfer_params: dict | None = None
 ```
 

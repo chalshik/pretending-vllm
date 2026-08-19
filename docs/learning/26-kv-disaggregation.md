@@ -36,11 +36,15 @@ Reading the scheduler and the engine core together:
 
 ```python
 # scheduler admission, AFTER the local prefix cache lookup
-new_computed_blocks, num_new_local_computed_tokens = self.kv_cache_manager.get_computed_blocks(request)
+new_computed_blocks, num_new_local_computed_tokens = (
+    self.kv_cache_manager.get_computed_blocks(request)
+)
 num_computed_tokens = num_new_local_computed_tokens
 
 if self.connector is not None:
-    num_external_tokens, _ = self.connector.get_num_new_matched_tokens(request, num_computed_tokens)
+    num_external_tokens, _ = self.connector.get_num_new_matched_tokens(
+        request, num_computed_tokens
+    )
     num_computed_tokens += num_external_tokens
 ```
 
@@ -49,9 +53,11 @@ worse than using it." The local prefix cache always wins.
 
 ```python
 new_blocks = self.kv_cache_manager.allocate_slots(
-    request, num_new_tokens,
+    request,
+    num_new_tokens,
     num_new_computed_tokens=num_new_local_computed_tokens + num_external_tokens,
-    new_computed_blocks=new_computed_blocks)
+    new_computed_blocks=new_computed_blocks,
+)
 ```
 
 The externally-held tokens count as **computed** — the request will not run them — but blocks still have
@@ -65,7 +71,7 @@ Then the engine core, before the model runs:
 def _transfer_kv(self, scheduler_output) -> None:
     seconds = connector.start_load_kv(metadata)
     if seconds > 0.0:
-        self.clock.advance(seconds)          # ← the pull costs real modeled time
+        self.clock.advance(seconds)  # ← the pull costs real modeled time
 ```
 
 and after it:
@@ -73,7 +79,7 @@ and after it:
 ```python
 saved = self.scheduler.connector.wait_for_save(scheduler_output.kv_connector_metadata)
 if saved > 0.0:
-    self.clock.advance(saved)                # ← the publish costs too
+    self.clock.advance(saved)  # ← the publish costs too
 ```
 
 **Both sides pay.** The producer for its writes, the consumer for its reads — charged on the engine's
@@ -140,8 +146,8 @@ print('same over object storage:', round(s2.transfer_seconds(256 * 2**20) * 1000
 ```python
 @dataclass
 class KVTransferConfig:
-    kv_connector: str | None = None            # "SimSharedStoreConnector"
-    kv_role: str | None = None                 # kv_producer | kv_consumer | kv_both
+    kv_connector: str | None = None  # "SimSharedStoreConnector"
+    kv_role: str | None = None  # kv_producer | kv_consumer | kv_both
     kv_rank: int | None = None
     kv_parallel_size: int = 1
     kv_connector_extra_config: dict[str, Any]  # the store's bandwidth and latency

@@ -39,7 +39,7 @@ Note the chunked-prefill subtlety in the runner:
 
 ```python
 if int(input_batch.seq_lens_np[pool_idx]) < int(self.req_states.prompt_len[slot]):
-    continue          # the prompt is not all in yet, so there is nothing to pool over
+    continue  # the prompt is not all in yet, so there is nothing to pool over
 ```
 
 Under chunked prefill a long document takes several steps, and **the vector only exists on the last of
@@ -68,7 +68,9 @@ means the knee is in a different place, and `max_num_batched_tokens` matters mor
 
 ```python
 def embed(self, prompt_token_ids: list[int], dimensions: int) -> list[float]:
-    digest = hashlib.sha256(b"embed" + b"".join(t.to_bytes(4, "little") for t in prompt_token_ids)).digest()
+    digest = hashlib.sha256(
+        b"embed" + b"".join(t.to_bytes(4, "little") for t in prompt_token_ids)
+    ).digest()
     # counter-mode expansion, then L2-normalise
 ```
 
@@ -124,7 +126,7 @@ Standard OpenAI shape: `object: "list"`, a `data` array of `{object, index, embe
 with `prompt_tokens`. Offline:
 
 ```python
-llm.embed(["first document", "second document"])   # -> list[PoolingRequestOutput]
+llm.embed(["first document", "second document"])  # -> list[PoolingRequestOutput]
 ```
 
 `PoolingRequestOutput` carries `outputs: PoolingOutput(data=[...])` plus `prompt_token_ids` — no

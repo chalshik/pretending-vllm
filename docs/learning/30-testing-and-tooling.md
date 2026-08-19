@@ -34,7 +34,8 @@ target rather than an observed fact.)
 Two settings in `tests/conftest.py` that change what the suite *means*:
 
 ```python
-os.environ.setdefault("PVLLM_DEBUG_INVARIANTS", "1")   # block accounting, slot-mapping validation
+# block accounting, budget bounds, slot-mapping validation
+os.environ.setdefault("PVLLM_DEBUG_INVARIANTS", "1")
 os.environ.setdefault("PVLLM_LOGGING_COLOR", "0")
 ```
 

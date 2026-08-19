@@ -60,10 +60,10 @@ This is the whole engine, in seven lines. From
 
 ```python
 def step(self):
-    planned = self._plan_step()            # scheduler decides; core stamps SCHEDULED
+    planned = self._plan_step()  # scheduler decides; core stamps SCHEDULED
     if planned is None:
-        return {}, False                   # nothing to do
-    self._transfer_kv(planned)             # pull externally-held KV, charge the clock
+        return {}, False  # nothing to do
+    self._transfer_kv(planned)  # pull externally-held KV, charge the clock
     return self._finish_step(planned, self.executor.execute_model(planned))
 ```
 
@@ -89,13 +89,13 @@ knowing their shapes is most of knowing the engine.
 fields:
 
 ```python
-scheduled_new_reqs: list[NewRequestData]      # never seen by the worker before
-scheduled_cached_reqs: CachedRequestData      # parallel arrays, an incremental diff
-num_scheduled_tokens: dict[str, int]          # req_id -> tokens this step
-total_num_scheduled_tokens: int               # must not exceed max_num_batched_tokens
-finished_req_ids: set[str]                    # worker should drop this state
+scheduled_new_reqs: list[NewRequestData]  # never seen by the worker before
+scheduled_cached_reqs: CachedRequestData  # parallel arrays, an incremental diff
+num_scheduled_tokens: dict[str, int]  # req_id -> tokens this step
+total_num_scheduled_tokens: int  # must not exceed max_num_batched_tokens
+finished_req_ids: set[str]  # worker should drop this state
 preempted_req_ids: set[str] | None
-num_common_prefix_blocks: list[int]           # per KV group, for cascade attention
+num_common_prefix_blocks: list[int]  # per KV group, for cascade attention
 scheduled_spec_decode_tokens: dict[str, list[int]]
 scheduled_encoder_inputs: dict[str, list[int]]
 grammar_bitmask: ndarray | None
@@ -116,11 +116,11 @@ Two design notes that are easy to miss:
 ```python
 req_ids: list[str]
 req_id_to_index: dict[str, int]
-sampled_token_ids: list[list[int]]     # inner list len > 1 only under speculation
+sampled_token_ids: list[list[int]]  # inner list len > 1 only under speculation
 logprobs: LogprobsLists | None
-spec_token_ids: list[list[int]] | None # drafts for the *next* step
+spec_token_ids: list[list[int]] | None  # drafts for the *next* step
 pooler_output: list[list[float] | None] | None
-modeled_duration: float                # this project's one addition
+modeled_duration: float  # this project's one addition
 ```
 
 `sampled_token_ids[i]` being a *list* is not a quirk: under speculative decoding one step

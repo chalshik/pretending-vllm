@@ -94,7 +94,8 @@ raise NotImplementedError("not supported")
 raise NotImplementedError(
     "KV cache event publishing (R12.5, --kv-events-config) is not modelled by "
     "pretending-vllm: no block store/remove events are emitted, so enabling it would "
-    "report a stream that never arrives.")
+    "report a stream that never arrives."
+)
 ```
 
 Three ingredients: **what** was asked for (with upstream's own flag name), **why** it is absent, and

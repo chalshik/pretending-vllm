@@ -30,19 +30,21 @@ costs the same.
 
 ```python
 # --- compute -------------------------------------------------------------
-flops  = 2.0 * active_params_local * tokens                    # multiply + add per parameter
-flops += 4.0 * layers * heads_local * head_dim * sum(q_i * s_i)  # attention: quadratic in context
+# two FLOPs per parameter per token: a multiply and an add
+flops = 2.0 * active_params_local * tokens
+# plus attention, which is quadratic in context rather than linear in parameters
+flops += 4.0 * layers * heads_local * head_dim * sum(q_i * s_i)
 t_compute = flops / (device.mfu * device.peak_flops)
 
 # --- memory --------------------------------------------------------------
-kv_bytes         = sum(seq_lens) * kv_bytes_per_token
+kv_bytes = sum(seq_lens) * kv_bytes_per_token
 activation_bytes = tokens * hidden_size * dtype_bytes * 4
-bytes_moved      = weight_bytes_local + kv_bytes + activation_bytes
+bytes_moved = weight_bytes_local + kv_bytes + activation_bytes
 t_memory = bytes_moved / (device.bw_eff * device.memory_bandwidth)
 
 # --- communication, encoder, launch overhead -----------------------------
-t_comm     = ...     # TP allreduces, PP handoffs, EP dispatch/combine — chapter 24
-t_encoder  = 2.0 * ENCODER_PARAMS * num_encoder_embeds / (mfu * peak_flops)   # chapter 23
+t_comm = ...  # TP allreduces, PP handoffs, EP dispatch/combine — chapter 24
+t_encoder = 2.0 * ENCODER_PARAMS * num_encoder_embeds / (mfu * peak_flops)  # chapter 23
 t_overhead = num_kernels * device.launch_overhead
 
 duration = max(t_compute, t_memory) + t_comm + t_overhead + t_encoder
@@ -154,11 +156,16 @@ as compute-bound for a reason that has nothing to do with the decode.
 ## Launch overhead and graph capture
 
 ```python
-KERNELS_PER_LAYER_EAGER   = 12   # qkv, attention, o-proj, two norms, three MLP matmuls, residuals
-KERNELS_PER_STEP_CAPTURED = 8    # with a captured graph, the whole step is a few launches
+# qkv, attention, o-proj, two norms, three MLP matmuls, residuals
+KERNELS_PER_LAYER_EAGER = 12
+# with a captured graph, the whole step is a handful of launches
+KERNELS_PER_STEP_CAPTURED = 8
 
-num_kernels = (KERNELS_PER_STEP_CAPTURED * pp_size if graph_hit
-               else KERNELS_PER_LAYER_EAGER * layers_local)
+num_kernels = (
+    KERNELS_PER_STEP_CAPTURED * pp_size
+    if graph_hit
+    else KERNELS_PER_LAYER_EAGER * layers_local
+)
 t_overhead = num_kernels * device.launch_overhead
 ```
 

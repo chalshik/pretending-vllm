@@ -21,11 +21,11 @@ embeddings will go:
 ```python
 @dataclass(frozen=True)
 class MultiModalFeatureSpec:
-    identifier: str    # content hash — the identity every cache in the engine uses
-    modality: str      # image | audio | video  (only image is modeled)
-    position: int      # index of the first placeholder token
-    length: int        # prompt tokens the item occupies
-    num_embeds: int    # encoder output embeddings — what the encoder budget counts
+    identifier: str  # content hash — the identity every cache in the engine uses
+    modality: str  # image | audio | video  (only image is modeled)
+    position: int  # index of the first placeholder token
+    length: int  # prompt tokens the item occupies
+    num_embeds: int  # encoder output embeddings — what the encoder budget counts
 ```
 
 `PLACEHOLDER_TOKEN_ID = 4` sits *below* the mock tokenizer's byte range, in the block of special ids
@@ -48,15 +48,17 @@ Encoder work and decoder work **do not trade against each other**: an image cost
 whatever the token budget is doing. So the scheduler spends a second budget:
 
 ```python
-encoder_budget = self.max_num_encoder_input_tokens   # defaults to the token budget,
-                                                     # floored at MAX_TOKENS_PER_MM_ITEM
+encoder_budget = self.max_num_encoder_input_tokens  # defaults to the token budget,
+# floored at MAX_TOKENS_PER_MM_ITEM
 ```
 
 `_schedule_encoder` runs for both running and waiting requests, and its return type tells you the
 whole design:
 
 ```python
-def _schedule_encoder(self, request, num_new_tokens, encoder_budget) -> tuple[int, list[int], int]:
+def _schedule_encoder(
+    self, request, num_new_tokens, encoder_budget
+) -> tuple[int, list[int], int]:
     """Returns (num_new_tokens, input_ids, encoder_budget).
 
     `num_new_tokens` may come back *smaller*: if an image cannot be encoded this step, the
@@ -120,9 +122,11 @@ worker's set only ever grew — the leak the eviction protocol exists to prevent
 From chapter [10](10-prefix-caching.md), the multimodal extra keys:
 
 ```python
-keys.extend((feature.identifier, feature.position - start_token_idx)
-            for feature in request.mm_features
-            if feature.position < end and feature.position + feature.length > start_token_idx)
+keys.extend(
+    (feature.identifier, feature.position - start_token_idx)
+    for feature in request.mm_features
+    if feature.position < end and feature.position + feature.length > start_token_idx
+)
 ```
 
 Two subtleties, both about getting the hit rate *right* rather than merely safe:
@@ -140,7 +144,7 @@ Two subtleties, both about getting the hit rate *right* rather than merely safe:
 ## The cost
 
 ```python
-ENCODER_PARAMS = 300_000_000     # ViT-L/14 scale
+ENCODER_PARAMS = 300_000_000  # ViT-L/14 scale
 
 if profile.num_encoder_embeds:
     encoder_flops = 2.0 * ENCODER_PARAMS * profile.num_encoder_embeds
@@ -190,7 +194,11 @@ from pvllm.multimodal.inputs import MultiModalFeatureSpec, content_hash
 llm = LLM(model="dense-0.6b", max_model_len=2048, trace_path="mm.jsonl")
 # submit two requests carrying the same image identifier via
 # llm_engine.add_request(..., mm_features=[MultiModalFeatureSpec(...)])
-# then look at:
+```
+
+Then read the two counters either side of the encoder cache:
+
+```bash
 curl -s localhost:8000/metrics | grep mm_cache      # queries vs hits
 ```
 

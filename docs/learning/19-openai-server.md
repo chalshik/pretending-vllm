@@ -190,7 +190,7 @@ template**, rendered from the tokenizer's config, so prompt token counts match r
 
 ## Readiness
 
-```python
+```
 @app.get("/health")
 ```
 

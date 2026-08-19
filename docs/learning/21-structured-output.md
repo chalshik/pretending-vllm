@@ -75,7 +75,8 @@ def grammar_init(self, request: Request) -> None:
     if self.backend is None:
         self.backend = self._build_backend(request)
     request.structured_output_request.grammar = self.executor.submit(
-        self._create_grammar, request)
+        self._create_grammar, request
+    )
 ```
 
 A `ThreadPoolExecutor` sized at **half the CPUs**, as upstream: grammar compilation is CPU-bound,
@@ -90,7 +91,7 @@ overlaps the wait rather than beginning when the scheduler first looks at the re
 ```python
 class RequestStatus(enum.IntEnum):
     WAITING = auto()
-    WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR = auto()     # ← set at construction
+    WAITING_FOR_STRUCTURED_OUTPUT_GRAMMAR = auto()  # ← set at construction
     ...
 ```
 
@@ -136,7 +137,8 @@ along the same path a completion takes, because the frontend is still holding th
 
 ```python
 constrained = sorted(
-    request_id for request_id in num_scheduled_tokens
+    request_id
+    for request_id in num_scheduled_tokens
     if self.requests[request_id].use_structured_output
     and not self.requests[request_id].is_prefill_chunk
 )
@@ -192,8 +194,8 @@ Both OpenAI's field and vLLM's extensions are accepted, because products targeti
 latter:
 
 ```python
-response_format = {"type": "json_schema", "json_schema": {...}}   # OpenAI
-guided_json / guided_regex / guided_choice / guided_grammar        # vLLM extensions
+response_format = {"type": "json_schema", "json_schema": {...}}  # OpenAI
+guided_json / guided_regex / guided_choice / guided_grammar  # vLLM extensions
 structural_tag, guided_whitespace_pattern, guided_decoding_backend
 ```
 

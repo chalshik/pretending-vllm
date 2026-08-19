@@ -27,7 +27,7 @@ fields are the CLI. This is the surface: `--max-num-seqs` is a field here, and s
 **`VllmConfig`** ([`config/vllm.py`](../../pvllm/config/vllm.py)) is the composite the
 engine actually reads — one sub-config per concern:
 
-```python
+```
 model_config, cache_config, parallel_config, scheduler_config, device_config,
 load_config, lora_config, speculative_config, structured_outputs_config,
 observability_config, kv_transfer_config
@@ -121,16 +121,16 @@ screen.
 ```python
 @dataclass
 class SimConfig:
-    device_card: str = "datacenter-80gb"   # or a JSON path
+    device_card: str = "datacenter-80gb"  # or a JSON path
     num_devices: int = 1
 
-    clock_mode: ClockMode = "virtual"      # virtual | real | scaled
+    clock_mode: ClockMode = "virtual"  # virtual | real | scaled
     time_scale: float = 1.0
 
-    cost_model_profile: str = "constant"   # constant | roofline
-    jitter_sigma: float = 0.0              # multiplicative N(0, sigma), seeded
+    cost_model_profile: str = "constant"  # constant | roofline
+    jitter_sigma: float = 0.0  # multiplicative N(0, sigma), seeded
 
-    model_card: str | None = None          # override lookup by model name
+    model_card: str | None = None  # override lookup by model name
 
     output_length_policy: str = "from_request"
     output_length_fixed: int = 128
@@ -138,7 +138,7 @@ class SimConfig:
     output_length_lognormal: tuple[float, float] = (4.0, 0.75)
     content_policy: str = "pseudoword"
 
-    spec_acceptance_rate: float = 0.7      # the one number you must measure yourself
+    spec_acceptance_rate: float = 0.7  # the one number you must measure yourself
 
     seed: int = 0
     trace_path: str | None = None
@@ -289,10 +289,11 @@ Two ways. In Python:
 
 ```python
 from pvllm.engine.arg_utils import EngineArgs
+
 config = EngineArgs(model="dense-8b", max_model_len=8192).create_engine_config()
-print(config)                      # a one-line summary
+print(config)  # a one-line summary
 print(config.sim_config)
-print(config.scheduler_config.max_num_batched_tokens)   # 8192, derived
+print(config.scheduler_config.max_num_batched_tokens)  # 8192, derived
 ```
 
 Over HTTP, with `--enable-debug-endpoints`:

@@ -19,7 +19,7 @@ Only the last line of the last layer is fake.
 
 ### `Executor`
 
-```python
+```
 def determine_available_memory(self) -> list[int]
 def get_kv_cache_specs(self) -> list[dict[str, KVCacheSpec]]
 def initialize_from_config(self, kv_cache_configs) -> None
@@ -52,7 +52,7 @@ price (chapter [24](24-parallelism.md)).
 [`sim_worker.py`](../../pvllm/v1/worker/sim_worker.py) mirrors `GPUWorker`'s lifecycle
 exactly, and the order is upstream's:
 
-```python
+```
 init_device()                   # build the SimDevice and its cost model; validate TP/PP/EP
 load_model()                    # "load" weights, spend the modeled time, build SimModel
 determine_available_memory()    # run a full-budget profiling step, then the memory model
@@ -87,7 +87,7 @@ timeline, and then the analytic memory model runs. Chapter [14](14-memory-model.
 [`worker/gpu/model_runner.py`](../../pvllm/v1/worker/gpu/model_runner.py) mirrors upstream's
 **V2** runner. Its method decomposition is kept because *it is the interface*:
 
-```python
+```
 add_requests(scheduler_output)      # requests the worker has never seen
 update_requests(scheduler_output)   # incremental patch for requests it has
 finish_requests(scheduler_output)   # requests that ended
@@ -104,11 +104,13 @@ A monolithic `execute_model` would work and would make a diff against upstream u
 
 ```python
 def execute_model(self, scheduler_output) -> ModelRunnerOutput:
-    plan = self._plan_step(scheduler_output)      # everything before the forward pass
+    plan = self._plan_step(scheduler_output)  # everything before the forward pass
     if plan is None:
         return ModelRunnerOutput.make_empty()
     input_batch, profile = plan
-    return self._finish_step(input_batch, self.device.execute(profile), scheduler_output)
+    return self._finish_step(
+        input_batch, self.device.execute(profile), scheduler_output
+    )
 ```
 
 and `_plan_step`, in order:
@@ -149,14 +151,14 @@ This is the part of upstream that people are usually surprised to learn is *not*
 So this port keeps upstream's numpy half almost line for line and drops the device copies:
 
 ```python
-num_scheduled_tokens = np.fromiter(...)                 # per request, in batch order
-query_start_loc_np   = np.zeros(num_reqs + 1)
+num_scheduled_tokens = np.fromiter(...)  # per request, in batch order
+query_start_loc_np = np.zeros(num_reqs + 1)
 np.cumsum(num_scheduled_tokens, out=query_start_loc_np[1:])
-num_tokens           = int(query_start_loc_np[-1])
-seq_lens_np          = num_computed + num_scheduled_tokens
+num_tokens = int(query_start_loc_np[-1])
+seq_lens_np = num_computed + num_scheduled_tokens
 positions[start:end] = np.arange(first_position, first_position + (end - start))
-is_prefilling_np     = (num_computed_prefill_tokens + num_scheduled_tokens) < prefill_len
-logits_indices       = (query_start_loc_np[1:] - 1)[~is_prefilling_np]
+is_prefilling_np = (num_computed_prefill_tokens + num_scheduled_tokens) < prefill_len
+logits_indices = (query_start_loc_np[1:] - 1)[~is_prefilling_np]
 ```
 
 Two lines carry most of the meaning:
@@ -209,9 +211,11 @@ ownership is not a valid check.
 ```python
 DEFAULT_CAPTURE_SIZES = (1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 192, 256)
 
-graph_hit = (input_batch.num_reqs in self.captured_sizes
-             and not attn_metadata.is_mixed_batch
-             and attn_metadata.num_prefills == 0)
+graph_hit = (
+    input_batch.num_reqs in self.captured_sizes
+    and not attn_metadata.is_mixed_batch
+    and attn_metadata.num_prefills == 0
+)
 ```
 
 A captured CUDA graph applies only to a uniform-decode batch of a captured size; a mixed
@@ -227,11 +231,13 @@ def sample_tokens(self, input_batch, scheduler_output=None) -> ModelRunnerOutput
     for batch_idx in sampling_indices:
         ...
         num_drafts = len(scheduled_drafts.get(req_id, ()))
-        accepted   = self.sim_model.accepted_draft_count(req_id, num_drafts)
-        tokens     = [self.sim_model.sample_token(req_id, position + offset, max_tokens)
-                      for offset in range(accepted + 1)]
+        accepted = self.sim_model.accepted_draft_count(req_id, num_drafts)
+        tokens = [
+            self.sim_model.sample_token(req_id, position + offset, max_tokens)
+            for offset in range(accepted + 1)
+        ]
         sampled[batch_idx] = tokens
-        drafts[batch_idx]  = self.sim_model.propose_drafts(...)
+        drafts[batch_idx] = self.sim_model.propose_drafts(...)
 ```
 
 Note what is still real even here: **which** positions sample (from `is_prefilling_np`), how

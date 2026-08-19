@@ -51,8 +51,8 @@ Reverse the order and a stream of new arrivals starves them — and every trace 
 Two budgets are spent as the phases run:
 
 ```python
-token_budget   = self.max_num_scheduled_tokens     # max_num_batched_tokens, default 8192
-encoder_budget = self.max_num_encoder_input_tokens # separate, chapter 23
+token_budget = self.max_num_scheduled_tokens  # max_num_batched_tokens, default 8192
+encoder_budget = self.max_num_encoder_input_tokens  # separate, chapter 23
 # and separately bounded:  len(self.running) <= max_num_seqs   (default 1024)
 ```
 
@@ -71,12 +71,12 @@ For each running request, in order:
 ```python
 num_new_tokens = request.num_tokens_with_spec - request.num_computed_tokens
 if 0 < threshold < num_new_tokens:
-    num_new_tokens = threshold                       # long_prefill_token_threshold
+    num_new_tokens = threshold  # long_prefill_token_threshold
 num_new_tokens = min(num_new_tokens, token_budget)
 num_new_tokens = min(num_new_tokens, self.max_model_len - request.num_computed_tokens)
 if num_new_tokens <= 0:
     req_index += 1
-    continue                                          # ← continue, not break
+    continue  # ← continue, not break
 ```
 
 That `continue` is deliberate: a later request may still be schedulable, and upstream
@@ -89,17 +89,17 @@ while True:
     new_blocks = self.kv_cache_manager.allocate_slots(request, num_new_tokens)
     if new_blocks is not None:
         break
-    victim = self.running.pop()          # FCFS: the most recently admitted
+    victim = self.running.pop()  # FCFS: the most recently admitted
     self._preempt_request(victim)
     preempted_reqs.append(victim)
     if victim is request:
-        break                            # preempted ourselves; nothing left to give up
+        break  # preempted ourselves; nothing left to give up
 ```
 
 ### Phase 3: admission
 
 ```python
-if not preempted_reqs:                   # ← the whole phase is skipped after a preemption
+if not preempted_reqs:  # ← the whole phase is skipped after a preemption
     while self.waiting and token_budget > 0:
         ...
 ```
@@ -145,7 +145,7 @@ And with chunking *off*, the whole prompt must fit in one step:
 
 ```python
 if not self.scheduler_config.enable_chunked_prefill and num_new_tokens > token_budget:
-    break     # it may fit in a later step, so stop rather than skip
+    break  # it may fit in a later step, so stop rather than skip
 ```
 
 `request.is_prefill_chunk` is maintained in `_update_after_schedule` and read in two places
@@ -161,8 +161,8 @@ def _preempt_request(self, request) -> None:
     request.status = RequestStatus.PREEMPTED
     request.num_computed_tokens = 0
     request.num_preemptions += 1
-    request.spec_token_ids = []           # drafts were made against KV it no longer has
-    self.waiting.prepend_request(request) # ← the FRONT of the queue
+    request.spec_token_ids = []  # drafts were made against KV it no longer has
+    self.waiting.prepend_request(request)  # ← the FRONT of the queue
 ```
 
 Everything the request computed is thrown away — its blocks return to the pool and
@@ -218,7 +218,7 @@ silently is not for large ones.
 
 ```python
 for request in self.running:
-    generated = sampled_token_ids[index]              # may be several tokens
+    generated = sampled_token_ids[index]  # may be several tokens
     # 1. roll back rejected drafts
     # 2. append tokens ONE AT A TIME, checking stop after each
     # 3. build an EngineCoreOutput if anything happened
@@ -247,7 +247,7 @@ KV corruption.
 
 ## Aborts
 
-```python
+```
 def finish_requests(self, request_ids, finished_status) -> None:
 ```
 
@@ -273,10 +273,17 @@ Starve the pool with `num_gpu_blocks_override` and watch it thrash:
 from pvllm.entrypoints.llm import LLM
 from pvllm.sampling_params import SamplingParams
 
-llm = LLM(model="dense-0.6b", max_model_len=512, num_gpu_blocks_override=40,
-          max_num_seqs=8, trace_path="preempt.jsonl")
-prompts = ["request number %d with a somewhat longer prompt to occupy blocks " % i * 3
-           for i in range(6)]
+llm = LLM(
+    model="dense-0.6b",
+    max_model_len=512,
+    num_gpu_blocks_override=40,
+    max_num_seqs=8,
+    trace_path="preempt.jsonl",
+)
+prompts = [
+    "request number %d with a somewhat longer prompt to occupy blocks " % i * 3
+    for i in range(6)
+]
 llm.generate(prompts, SamplingParams(max_tokens=40))
 ```
 

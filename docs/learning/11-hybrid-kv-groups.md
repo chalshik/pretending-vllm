@@ -183,7 +183,7 @@ capacity plans:
 def kv_bytes_per_token(self, kv_dtype=None, tp_size=1) -> int:
     ...
     if self.use_mla:
-        return self.mla_head_size * dtype_bytes * layers      # no ×2, no ÷tp_size
+        return self.mla_head_size * dtype_bytes * layers  # no ×2, no ÷tp_size
     kv_heads_local = max(1, self.num_key_value_heads // tp_size)
     return 2 * kv_heads_local * self.head_dim * dtype_bytes * layers
 ```
@@ -228,9 +228,12 @@ reporting either extreme answers a capacity question with the wrong model's numb
 
 ```python
 for group in kv_cache_groups:
-    if windowed:      blocks += windowed_blocks_for_one_request(...)
-    elif mamba:       blocks += state_blocks_for_one_request(...)
-    else:             blocks += ceil(max_model_len / block_size)
+    if windowed:
+        blocks += windowed_blocks_for_one_request(...)
+    elif mamba:
+        blocks += state_blocks_for_one_request(...)
+    else:
+        blocks += ceil(max_model_len / block_size)
 ```
 
 Note `windowed_blocks_for_one_request` is **not** `ceil((W-1)/block) + 1`. That is the steady
@@ -244,6 +247,7 @@ guard passes and then `allocate_slots` returns `None` every step, forever.
 
 ```python
 from pvllm.entrypoints.llm import LLM
+
 LLM(model="hybrid-4b", max_model_len=8192, disable_hybrid_kv_cache_manager=True)
 ```
 
@@ -262,17 +266,27 @@ Price the same model both ways:
 
 ```python
 from pvllm.engine.arg_utils import EngineArgs
+from pvllm.v1.core.kv_cache_utils import get_kv_cache_groups
+from pvllm.v1.worker.gpu.attn_utils import get_kv_cache_spec
 
 for disabled in (False, True):
-    cfg = EngineArgs(model="hybrid-4b", max_model_len=8192,
-                     disable_hybrid_kv_cache_manager=disabled).create_engine_config()
-    print("hybrid disabled:", disabled,
-          "| groups resolved at startup — watch num_gpu_blocks in the log line")
+    cfg = EngineArgs(
+        model="hybrid-4b", max_model_len=8192, disable_hybrid_kv_cache_manager=disabled
+    ).create_engine_config()
+    groups = get_kv_cache_groups(get_kv_cache_spec(cfg))
+    kinds = sorted({type(g.kv_cache_spec).__name__ for g in groups})
+    print(f"hybrid manager disabled={disabled}: {len(groups)} group(s), {kinds}")
 ```
 
-Or run `pvllm bench latency --model hybrid-4b --max-model-len 8192 --input-len 1024
---output-len 32` and compare its startup line to a Python run with the manager disabled. The two
-numbers to watch are `num_gpu_blocks` and `max_concurrency`.
+```
+hybrid manager disabled=False: 6 group(s), ['FullAttentionSpec', 'SlidingWindowSpec']
+hybrid manager disabled=True: 1 group(s), ['FullAttentionSpec']
+```
+
+Every windowed layer was promoted to full attention, and six groups collapsed to one. Then run
+`pvllm bench latency --model hybrid-4b --max-model-len 8192 --input-len 1024 --output-len 32`
+both ways and compare the startup line: `num_gpu_blocks` and `max_concurrency` are where the
+promotion is paid for.
 
 ## Check yourself
 
