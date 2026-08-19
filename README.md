@@ -307,6 +307,13 @@ uv venv && uv pip install -e ".[dev]"
 pytest
 ```
 
+### Learning the engine
+
+[`docs/learning/`](docs/learning/README.md) is a 32-chapter tutorial series that starts from "what is
+LLM inference" and ends at "I can add a feature to this engine". Each chapter teaches the real vLLM
+concept and then the file that stands in for it here, so reading it is a way of reading vLLM V1 with a
+debugger you can run on a laptop.
+
 ### Token counts that match your model
 
 By default the tokenizer is a byte-level mock: `"hello world"` is eleven tokens where your model
